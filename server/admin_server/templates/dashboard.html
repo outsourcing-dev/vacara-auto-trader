@@ -83,6 +83,19 @@
                 display: block;
             }
         }
+        
+        /* 금액 하이라이트 */
+        .amount-positive {
+            color: #198754;
+        }
+        
+        .amount-negative {
+            color: #dc3545;
+        }
+        
+        .amount-neutral {
+            color: #0d6efd;
+        }
     </style>
 </head>
 
@@ -116,6 +129,9 @@
                             <th>이름</th>
                             <th>전화번호</th>
                             <th>추천인</th>
+                            <th>시작 금액</th>
+                            <th>종료 금액</th>
+                            <th>수익률</th>
                             <th>사용 기간</th>
                             <th>남은 일수</th>
                             <th>최근 로그인</th>
@@ -176,6 +192,24 @@
                         <div class="mb-3">
                             <label for="userReferrer" class="form-label">추천인</label>
                             <input type="text" class="form-control" id="userReferrer">
+                        </div>
+                        
+                        <!-- 새로운 필드 추가 - 시작 금액 -->
+                        <div class="mb-3">
+                            <label for="userStartAmount" class="form-label">시작 금액</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="userStartAmount" min="0">
+                                <span class="input-group-text">원</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 새로운 필드 추가 - 종료 금액 -->
+                        <div class="mb-3">
+                            <label for="userEndAmount" class="form-label">종료 금액</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="userEndAmount" min="0">
+                                <span class="input-group-text">원</span>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -252,6 +286,28 @@
             }
             return token;
         }
+        
+        // 숫자에 천 단위 콤마 추가
+        function formatNumber(num) {
+            return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        }
+        
+        // 수익률 계산 및 표시 클래스 결정
+        function calculateProfit(startAmount, endAmount) {
+            if (!startAmount || startAmount === 0) return { profit: 0, class: 'amount-neutral' };
+            
+            const profitAmount = endAmount - startAmount;
+            const profitPercent = (profitAmount / startAmount) * 100;
+            
+            let cssClass = 'amount-neutral';
+            if (profitPercent > 0) cssClass = 'amount-positive';
+            else if (profitPercent < 0) cssClass = 'amount-negative';
+            
+            return {
+                profit: profitPercent.toFixed(2),
+                class: cssClass
+            };
+        }
 
         // 사용자 목록 불러오기
         async function loadUsers() {
@@ -286,6 +342,13 @@
                     const diffTime = endDate.getTime() - today.getTime();
                     const daysLeft = Math.floor(diffTime / (1000 * 60 * 60 * 24));
                     
+                    // 시작 금액과 종료 금액이 없으면 기본값 0 설정
+                    const startAmount = user.start_amount || 0;
+                    const endAmount = user.end_amount || 0;
+                    
+                    // 수익률 계산
+                    const profit = calculateProfit(startAmount, endAmount);
+                    
                     // 데스크톱 테이블에 행 추가
                     const row = document.createElement('tr');
                     row.innerHTML = `
@@ -295,6 +358,9 @@
                         <td>${user.name || '-'}</td>
                         <td>${user.phone ? String(user.phone) : '-'}</td>
                         <td>${user.referrer || '-'}</td>
+                        <td>${formatNumber(startAmount)}원</td>
+                        <td>${formatNumber(endAmount)}원</td>
+                        <td class="${profit.class}">${profit.profit}%</td>
                         <td>${user.end_date}</td>
                         <td>${daysLeft}일</td>
                         <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
@@ -328,6 +394,18 @@
                         <div class="card-field">
                             <span class="card-field-name">추천인:</span>
                             <span>${user.referrer || '-'}</span>
+                        </div>
+                        <div class="card-field">
+                            <span class="card-field-name">시작 금액:</span>
+                            <span>${formatNumber(startAmount)}원</span>
+                        </div>
+                        <div class="card-field">
+                            <span class="card-field-name">종료 금액:</span>
+                            <span>${formatNumber(endAmount)}원</span>
+                        </div>
+                        <div class="card-field">
+                            <span class="card-field-name">수익률:</span>
+                            <span class="${profit.class}">${profit.profit}%</span>
                         </div>
                         <div class="card-field">
                             <span class="card-field-name">사용 기간:</span>
@@ -390,6 +468,10 @@
                 const endDate = new Date();
                 endDate.setDate(endDate.getDate() + 30);
                 document.getElementById('userEndDate').value = endDate.toISOString().split('T')[0];
+                
+                // 기본 금액은 0으로 설정
+                document.getElementById('userStartAmount').value = 0;
+                document.getElementById('userEndAmount').value = 0;
             } else {
                 document.getElementById('userModalLabel').textContent = '사용자 수정';
                 document.getElementById('userIdInput').disabled = true;
@@ -425,6 +507,8 @@
                     document.getElementById('userName').value = user.name || '';
                     document.getElementById('userPhone').value = user.phone || '';
                     document.getElementById('userReferrer').value = user.referrer || '';
+                    document.getElementById('userStartAmount').value = user.start_amount || 0;
+                    document.getElementById('userEndAmount').value = user.end_amount || 0;
                     
                     userModal.show();
                 }
@@ -448,7 +532,9 @@
                 end_date: document.getElementById('userEndDate').value,
                 name: document.getElementById('userName').value,
                 phone: document.getElementById('userPhone').value,
-                referrer: document.getElementById('userReferrer').value
+                referrer: document.getElementById('userReferrer').value,
+                start_amount: parseInt(document.getElementById('userStartAmount').value) || 0,
+                end_amount: parseInt(document.getElementById('userEndAmount').value) || 0
             };
             
             try {

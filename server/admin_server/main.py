@@ -85,6 +85,7 @@ async def dashboard(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
 # 사용자 모델들
+# 사용자 모델들 - main.py에서 수정
 class UserCreate(BaseModel):
     id: str
     pw: str
@@ -92,6 +93,8 @@ class UserCreate(BaseModel):
     name: str = ''
     phone: str = ''
     referrer: str = ''
+    start_amount: int = 0  # 새 필드 추가
+    end_amount: int = 0    # 새 필드 추가
 
 class UserUpdate(BaseModel):
     pw: str
@@ -99,8 +102,11 @@ class UserUpdate(BaseModel):
     name: str = ''
     phone: str = ''
     referrer: str = ''
+    start_amount: int = 0  # 새 필드 추가
+    end_amount: int = 0    # 새 필드 추가
 
 # 사용자 목록 조회
+# 사용자 목록 조회 - main.py에서 수정
 @app.get("/api/users")
 async def get_users():
     with db_handler.get_connection() as conn:
@@ -115,7 +121,9 @@ async def get_users():
                 phone,
                 referrer,
                 logged_in,
-                last_login
+                last_login,
+                start_amount,  # 새 컬럼 추가
+                end_amount     # 새 컬럼 추가
             FROM hol_user
             ORDER BY no DESC
         """)
@@ -124,28 +132,29 @@ async def get_users():
     return {"users": users}
 
 # 사용자 추가
+# 사용자 추가 - main.py에서 수정
 @app.post("/api/users")
 async def create_user(user: UserCreate):
     with db_handler.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO hol_user (id, pw, end_date, name, phone, referrer)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (user.id, user.pw, user.end_date, user.name, user.phone, user.referrer))
+            INSERT INTO hol_user (id, pw, end_date, name, phone, referrer, start_amount, end_amount)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (user.id, user.pw, user.end_date, user.name, user.phone, user.referrer, user.start_amount, user.end_amount))
         conn.commit()
     
     return {"message": "사용자 추가 완료"}
 
-# 사용자 수정
+# 사용자 수정 - main.py에서 수정
 @app.put("/api/users/{user_id}")
 async def update_user(user_id: str, user: UserUpdate):
     with db_handler.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE hol_user
-            SET pw = %s, end_date = %s, name = %s, phone = %s, referrer = %s
+            SET pw = %s, end_date = %s, name = %s, phone = %s, referrer = %s, start_amount = %s, end_amount = %s
             WHERE id = %s
-        """, (user.pw, user.end_date, user.name, user.phone, user.referrer, user_id))
+        """, (user.pw, user.end_date, user.name, user.phone, user.referrer, user.start_amount, user.end_amount, user_id))
         conn.commit()
     
     return {"message": "사용자 수정 완료"}
