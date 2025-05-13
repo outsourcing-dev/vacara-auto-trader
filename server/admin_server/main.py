@@ -22,8 +22,8 @@ app = FastAPI(title="Vacara Auto Trader Admin")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 templates_dir = os.path.join(current_dir, "templates")
 templates = Jinja2Templates(directory=templates_dir)
-static_dir = os.path.join(current_dir, "static")
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+# static_dir = os.path.join(current_dir, "static")
+# app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # OAuth2 설정
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
