@@ -18,5 +18,5 @@ class Config:
     
     # 앱 설정
     APP_NAME = "Vacara Auto Trader"
-    ADMIN_USERNAME = "admin"  # 초기 관리자 계정
-    ADMIN_PASSWORD = "admin123"  # 초기 비밀번호 (실제로는 해싱 처리)
+    ADMIN_USERNAME = "eropoo1"  # 초기 관리자 계정
+    ADMIN_PASSWORD = "464646"  # 초기 비밀번호 (실제로는 해싱 처리)

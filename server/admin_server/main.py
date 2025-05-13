@@ -157,15 +157,15 @@ async def delete_user(user_id: str):
     
     return {"message": "사용자 삭제 완료"}
 
-@app.get("/api/statistics")
-async def get_statistics():
-    """대충 통계값 더미 데이터 리턴"""
-    return {
-        "active_users": 10,
-        "total_sessions": 20,
-        "active_sessions": 5,
-        "total_profit": 1000000
-    }
+# @app.get("/api/statistics")
+# async def get_statistics():
+#     """대충 통계값 더미 데이터 리턴"""
+#     return {
+#         "active_users": 10,
+#         "total_sessions": 20,
+#         "active_sessions": 5,
+#         "total_profit": 1000000
+#     }
 
 
 # 애플리케이션 실행
