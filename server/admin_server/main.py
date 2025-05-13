@@ -18,16 +18,19 @@ from common.config import Config
 # FastAPI 앱 생성
 app = FastAPI(title="Vacara Auto Trader Admin")
 
-# 템플릿 및 정적 파일 설정
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# 템플릿 및 정적 파일 설정 - 경로 수정
+current_dir = os.path.dirname(os.path.abspath(__file__))
+templates_dir = os.path.join(current_dir, "templates")
+templates = Jinja2Templates(directory=templates_dir)
+static_dir = os.path.join(current_dir, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # OAuth2 설정
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 # 하드코딩 관리자 정보
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "1234"
+ADMIN_USERNAME = "eropoo1"
+ADMIN_PASSWORD = "qw4646"  # 실제로는 해싱 처리 필요
 
 # 사용자 인증 유틸리티
 async def get_current_user(token: str = Depends(oauth2_scheme)):
@@ -156,17 +159,6 @@ async def delete_user(user_id: str):
         conn.commit()
     
     return {"message": "사용자 삭제 완료"}
-
-# @app.get("/api/statistics")
-# async def get_statistics():
-#     """대충 통계값 더미 데이터 리턴"""
-#     return {
-#         "active_users": 10,
-#         "total_sessions": 20,
-#         "active_sessions": 5,
-#         "total_profit": 1000000
-#     }
-
 
 # 애플리케이션 실행
 if __name__ == "__main__":
