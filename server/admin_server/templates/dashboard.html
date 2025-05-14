@@ -96,6 +96,38 @@
         .amount-neutral {
             color: #0d6efd;
         }
+        
+        /* 검색창 스타일 */
+        .search-container {
+            margin-bottom: 20px;
+        }
+        
+        .search-input {
+            position: relative;
+        }
+        
+        .search-input i {
+            position: absolute;
+            top: 50%;
+            left: 10px;
+            transform: translateY(-50%);
+            color: #6c757d;
+        }
+        
+        .search-input input {
+            padding-left: 35px;
+        }
+        
+        /* 검색 결과 없음 메시지 */
+        .no-results {
+            text-align: center;
+            padding: 20px;
+            font-style: italic;
+            color: #6c757d;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            margin-top: 10px;
+        }
     </style>
 </head>
 
@@ -115,6 +147,18 @@
                     <button type="button" class="btn btn-sm btn-primary" id="addUserBtn" data-bs-toggle="modal" data-bs-target="#userModal">
                         <i class="bi bi-person-plus"></i> 사용자 추가
                     </button>
+                </div>
+            </div>
+            
+            <!-- 검색창 추가 -->
+            <div class="search-container">
+                <div class="row">
+                    <div class="col-12 col-md-6 col-lg-4">
+                        <div class="search-input">
+                            <i class="bi bi-search"></i>
+                            <input type="text" id="searchInput" class="form-control" placeholder="아이디 또는 이름으로 검색">
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -142,11 +186,17 @@
                         <!-- 여기에 사용자 목록이 동적으로 추가됩니다 (데스크톱) -->
                     </tbody>
                 </table>
+                <div id="noResultsTableMessage" class="no-results" style="display: none;">
+                    검색 결과가 없습니다.
+                </div>
             </div>
             
             <!-- 모바일용 카드 목록 -->
             <div class="mobile-cards" id="usersMobileCards">
                 <!-- 여기에 사용자 목록이 동적으로 추가됩니다 (모바일) -->
+            </div>
+            <div id="noResultsMobileMessage" class="no-results" style="display: none;">
+                검색 결과가 없습니다.
             </div>
         </main>
     </div>
@@ -247,6 +297,9 @@
         let userModal;
         let deleteModal;
         
+        // 사용자 데이터 저장 변수
+        let allUsers = [];
+        
         // 페이지 로드 시 실행
         document.addEventListener('DOMContentLoaded', function () {
             // 모달 인스턴스 초기화
@@ -269,6 +322,11 @@
             
             // 로그아웃 버튼 이벤트
             document.getElementById('logoutBtn').addEventListener('click', logout);
+            
+            // 검색 이벤트 리스너 추가
+            document.getElementById('searchInput').addEventListener('input', function() {
+                filterUsers(this.value.trim().toLowerCase());
+            });
         });
 
         // 로그아웃 함수
@@ -327,131 +385,173 @@
 
                 const data = await response.json();
                 
-                // 데스크톱 테이블 업데이트
-                const tableBody = document.getElementById('usersTableBody');
-                tableBody.innerHTML = '';
+                // 전체 사용자 데이터 저장
+                allUsers = data.users;
                 
-                // 모바일 카드 목록 업데이트
-                const mobileCards = document.getElementById('usersMobileCards');
-                mobileCards.innerHTML = '';
-
-                const today = new Date();
-
-                data.users.forEach((user, index) => {
-                    const endDate = new Date(user.end_date);
-                    const diffTime = endDate.getTime() - today.getTime();
-                    const daysLeft = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                    
-                    // 시작 금액과 종료 금액이 없으면 기본값 0 설정
-                    const startAmount = user.start_amount || 0;
-                    const endAmount = user.end_amount || 0;
-                    
-                    // 수익률 계산
-                    const profit = calculateProfit(startAmount, endAmount);
-                    
-                    // 데스크톱 테이블에 행 추가
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${index + 1}</td>
-                        <td>${user.id}</td>
-                        <td>${user.pw}</td>
-                        <td>${user.name || '-'}</td>
-                        <td>${user.phone ? String(user.phone) : '-'}</td>
-                        <td>${user.referrer || '-'}</td>
-                        <td>${formatNumber(startAmount)}원</td>
-                        <td>${formatNumber(endAmount)}원</td>
-                        <td class="${profit.class}">${profit.profit}%</td>
-                        <td>${user.end_date}</td>
-                        <td>${daysLeft}일</td>
-                        <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
-                        <td>
-                            <button class="btn btn-sm btn-outline-primary edit-btn" data-user-id="${user.id}">수정</button>
-                            <button class="btn btn-sm btn-outline-danger delete-btn" data-user-id="${user.id}">삭제</button>
-                        </td>
-                    `;
-                    tableBody.appendChild(row);
-                    
-                    // 모바일 카드 추가
-                    const card = document.createElement('div');
-                    card.className = 'user-card';
-                    card.innerHTML = `
-                        <div class="card-title">
-                            <span>#${index + 1} ${user.id}</span>
-                            <span>${daysLeft}일 남음</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">비밀번호:</span>
-                            <span>${user.pw}</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">이름:</span>
-                            <span>${user.name || '-'}</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">전화번호:</span>
-                            <span>${user.phone ? String(user.phone) : '-'}</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">추천인:</span>
-                            <span>${user.referrer || '-'}</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">시작 금액:</span>
-                            <span>${formatNumber(startAmount)}원</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">종료 금액:</span>
-                            <span>${formatNumber(endAmount)}원</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">수익률:</span>
-                            <span class="${profit.class}">${profit.profit}%</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">사용 기간:</span>
-                            <span>${user.end_date}</span>
-                        </div>
-                        <div class="card-field">
-                            <span class="card-field-name">최근 로그인:</span>
-                            <span>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</span>
-                        </div>
-                        <div class="card-actions">
-                            <button class="btn btn-sm btn-outline-primary edit-btn-mobile" data-user-id="${user.id}">수정</button>
-                            <button class="btn btn-sm btn-outline-danger delete-btn-mobile" data-user-id="${user.id}">삭제</button>
-                        </div>
-                    `;
-                    mobileCards.appendChild(card);
-                });
+                // 사용자 데이터 표시
+                renderUsers(allUsers);
                 
-                // 데스크톱 버튼 이벤트 추가
-                document.querySelectorAll('.edit-btn').forEach(button => {
-                    button.addEventListener('click', function() {
-                        editUser(this.getAttribute('data-user-id'));
-                    });
-                });
-                
-                document.querySelectorAll('.delete-btn').forEach(button => {
-                    button.addEventListener('click', function() {
-                        showDeleteConfirmation(this.getAttribute('data-user-id'));
-                    });
-                });
-                
-                // 모바일 버튼 이벤트 추가
-                document.querySelectorAll('.edit-btn-mobile').forEach(button => {
-                    button.addEventListener('click', function() {
-                        editUser(this.getAttribute('data-user-id'));
-                    });
-                });
-                
-                document.querySelectorAll('.delete-btn-mobile').forEach(button => {
-                    button.addEventListener('click', function() {
-                        showDeleteConfirmation(this.getAttribute('data-user-id'));
-                    });
-                });
             } catch (error) {
                 console.error('사용자 목록 오류:', error);
                 alert('사용자 목록을 불러오는데 실패했습니다.');
             }
+        }
+        
+        // 사용자 데이터 렌더링
+        function renderUsers(users) {
+            // 데스크톱 테이블 업데이트
+            const tableBody = document.getElementById('usersTableBody');
+            tableBody.innerHTML = '';
+            
+            // 모바일 카드 목록 업데이트
+            const mobileCards = document.getElementById('usersMobileCards');
+            mobileCards.innerHTML = '';
+            
+            const today = new Date();
+            
+            // 결과가 없을 때 메시지 표시/숨김
+            const noResultsTableMsg = document.getElementById('noResultsTableMessage');
+            const noResultsMobileMsg = document.getElementById('noResultsMobileMessage');
+            
+            if (users.length === 0) {
+                noResultsTableMsg.style.display = 'block';
+                noResultsMobileMsg.style.display = 'block';
+            } else {
+                noResultsTableMsg.style.display = 'none';
+                noResultsMobileMsg.style.display = 'none';
+            }
+
+            users.forEach((user, index) => {
+                const endDate = new Date(user.end_date);
+                const diffTime = endDate.getTime() - today.getTime();
+                const daysLeft = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                
+                // 시작 금액과 종료 금액이 없으면 기본값 0 설정
+                const startAmount = user.start_amount || 0;
+                const endAmount = user.end_amount || 0;
+                
+                // 수익률 계산
+                const profit = calculateProfit(startAmount, endAmount);
+                
+                // 데스크톱 테이블에 행 추가
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${user.id}</td>
+                    <td>${user.pw}</td>
+                    <td>${user.name || '-'}</td>
+                    <td>${user.phone ? String(user.phone) : '-'}</td>
+                    <td>${user.referrer || '-'}</td>
+                    <td>${formatNumber(startAmount)}원</td>
+                    <td>${formatNumber(endAmount)}원</td>
+                    <td class="${profit.class}">${profit.profit}%</td>
+                    <td>${user.end_date}</td>
+                    <td>${daysLeft}일</td>
+                    <td>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary edit-btn" data-user-id="${user.id}">수정</button>
+                        <button class="btn btn-sm btn-outline-danger delete-btn" data-user-id="${user.id}">삭제</button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+                
+                // 모바일 카드 추가
+                const card = document.createElement('div');
+                card.className = 'user-card';
+                card.innerHTML = `
+                    <div class="card-title">
+                        <span>#${index + 1} ${user.id}</span>
+                        <span>${daysLeft}일 남음</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">비밀번호:</span>
+                        <span>${user.pw}</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">이름:</span>
+                        <span>${user.name || '-'}</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">전화번호:</span>
+                        <span>${user.phone ? String(user.phone) : '-'}</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">추천인:</span>
+                        <span>${user.referrer || '-'}</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">시작 금액:</span>
+                        <span>${formatNumber(startAmount)}원</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">종료 금액:</span>
+                        <span>${formatNumber(endAmount)}원</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">수익률:</span>
+                        <span class="${profit.class}">${profit.profit}%</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">사용 기간:</span>
+                        <span>${user.end_date}</span>
+                    </div>
+                    <div class="card-field">
+                        <span class="card-field-name">최근 로그인:</span>
+                        <span>${user.last_login ? new Date(user.last_login).toLocaleString() : '-'}</span>
+                    </div>
+                    <div class="card-actions">
+                        <button class="btn btn-sm btn-outline-primary edit-btn-mobile" data-user-id="${user.id}">수정</button>
+                        <button class="btn btn-sm btn-outline-danger delete-btn-mobile" data-user-id="${user.id}">삭제</button>
+                    </div>
+                `;
+                mobileCards.appendChild(card);
+            });
+            
+            // 데스크톱 버튼 이벤트 추가
+            document.querySelectorAll('.edit-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    editUser(this.getAttribute('data-user-id'));
+                });
+            });
+            
+            document.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    showDeleteConfirmation(this.getAttribute('data-user-id'));
+                });
+            });
+            
+            // 모바일 버튼 이벤트 추가
+            document.querySelectorAll('.edit-btn-mobile').forEach(button => {
+                button.addEventListener('click', function() {
+                    editUser(this.getAttribute('data-user-id'));
+                });
+            });
+            
+            document.querySelectorAll('.delete-btn-mobile').forEach(button => {
+                button.addEventListener('click', function() {
+                    showDeleteConfirmation(this.getAttribute('data-user-id'));
+                });
+            });
+        }
+        
+        // 사용자 필터링 함수
+        function filterUsers(searchText) {
+            if (!searchText) {
+                // 검색어가 없으면 모든 사용자 표시
+                renderUsers(allUsers);
+                return;
+            }
+            
+            // 검색어로 사용자 필터링 (아이디 또는 이름 기준)
+            const filteredUsers = allUsers.filter(user => {
+                const userId = user.id.toLowerCase();
+                const userName = (user.name || '').toLowerCase();
+                
+                return userId.includes(searchText) || userName.includes(searchText);
+            });
+            
+            // 필터링된 사용자 목록 렌더링
+            renderUsers(filteredUsers);
         }
         
         // 사용자 폼 초기화
