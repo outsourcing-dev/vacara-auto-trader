@@ -300,6 +300,102 @@ async def extract_config_from_url(request: Request):
         logger.error(f"URL 파싱 오류: {e}")
         return {"status": "error", "message": f"URL 파싱 오류: {e}"}
 
+@app.get("/api/baccarat/room-data/{user_id}/{room_id}")
+async def get_room_raw_data(user_id: str, room_id: str):
+    """특정 방의 상세 데이터 조회 (디버깅용)"""
+    if not lobby_manager.has_user_data(user_id):
+        return {"status": "error", "message": "사용자 데이터가 없습니다."}
+    
+    room_data = lobby_manager.get_room_data(user_id, room_id)
+    
+    if not room_data:
+        return {"status": "error", "message": "해당 방의 데이터가 없습니다."}
+        
+    try:
+        # 결과 정렬 함수
+        def get_sort_key(result):
+            try:
+                pos = result.get("pos", [0, 0])
+                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                    return pos[0] * 7 + pos[1]
+                return 0
+            except Exception:
+                return 0
+        
+        # 전체 결과 정렬 시도
+        sorted_results = sorted(room_data, key=get_sort_key)
+        
+        # 최근 15개 결과 추출
+        recent_results = sorted_results[-15:] if len(sorted_results) >= 15 else sorted_results
+        
+        # 결과를 읽기 쉬운 형태로 변환
+        readable_results = []
+        for result in recent_results:
+            c = result.get('c', '')
+            winner = "Player" if c == 'B' else ("Banker" if c == 'R' else "Tie/Other")
+            
+            extras = []
+            if result.get('nat') == 1:
+                extras.append('Natural')
+            if result.get('ties') == 1:
+                extras.append('Tie')
+            if result.get('pp') == 1:
+                extras.append('Player Pair')
+            if result.get('bp') == 1:
+                extras.append('Banker Pair')
+                
+            readable_results.append({
+                "position": result.get("pos", []),
+                "winner": winner,
+                "extras": extras,
+                "raw_code": c
+            })
+            
+        # 결과 패턴 문자열 (과거 -> 최근 순)
+        result_pattern = "".join([
+            "P" if r.get('c', '') == 'B' else ("B" if r.get('c', '') == 'R' else "T") 
+            for r in sorted_results[-15:]
+        ])
+        
+        # 결과 통계
+        total_games = len(sorted_results)
+        recent_count = len(recent_results)
+        
+        player_wins = sum(1 for r in recent_results if r.get('c', '') == 'B')
+        banker_wins = sum(1 for r in recent_results if r.get('c', '') == 'R')
+        ties = recent_count - player_wins - banker_wins
+        
+        return {
+            "status": "success", 
+            "room_id": room_id, 
+            "room_name": lobby_manager.get_room_mappings(user_id).get(room_id, room_id),
+            "total_games": total_games,
+            "recent_count": recent_count,
+            "result_pattern": result_pattern,
+            "stats": {
+                "player_wins": player_wins,
+                "banker_wins": banker_wins,
+                "ties": ties,
+                "player_rate": round(player_wins / recent_count * 100, 1) if recent_count > 0 else 0,
+                "banker_rate": round(banker_wins / recent_count * 100, 1) if recent_count > 0 else 0
+            },
+            "readable_results": readable_results,
+            "raw_data_sample": sorted_results[:3] if sorted_results else []  # 원시 데이터 일부 포함
+        }
+    except Exception as e:
+        logger.error(f"방 데이터 처리 중 오류 발생: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        
+        return {
+            "status": "error", 
+            "message": f"데이터 처리 오류: {str(e)}", 
+            "room_id": room_id,
+            "data_count": len(room_data),
+            "sample_data": room_data[:2] if room_data else [],
+            "error_trace": error_trace
+        }
+        
 if __name__ == "__main__":
     # 서버 실행
     uvicorn.run("server:app", host="0.0.0.0", port=8080, reload=False)

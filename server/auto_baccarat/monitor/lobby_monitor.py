@@ -22,18 +22,22 @@ logger = logging.getLogger("lobby_monitor")
 
 class ClientConfig:
     """바카라 클라이언트 연결 설정"""
-    def __init__(self, session_id: str, bare_session_id: str, instance: str, client_version: str):
+    def __init__(self, session_id: str, bare_session_id: str, instance: str, client_version: str, domain: str = None, protocol: str = None):
         self.session_id = session_id
         self.bare_session_id = bare_session_id
         self.instance = instance
         self.client_version = client_version
+        self.domain = domain or "skylinestart.evo-games.com"  # 기본 도메인
+        self.protocol = protocol or "wss"  # 기본 프로토콜
     
     def to_dict(self) -> Dict[str, str]:
         return {
             "session_id": self.session_id,
             "bare_session_id": self.bare_session_id,
             "instance": self.instance,
-            "client_version": self.client_version
+            "client_version": self.client_version,
+            "domain": self.domain,
+            "protocol": self.protocol
         }
     
     @classmethod
@@ -42,7 +46,9 @@ class ClientConfig:
             session_id=data["session_id"],
             bare_session_id=data["bare_session_id"],
             instance=data["instance"],
-            client_version=data["client_version"]
+            client_version=data["client_version"],
+            domain=data.get("domain", "skylinestart.evo-games.com"),
+            protocol=data.get("protocol", "wss")
         )
 
 class BaccaratWebSocketClient:
@@ -79,8 +85,11 @@ class BaccaratWebSocketClient:
         
     def _build_websocket_url(self) -> str:
         """WebSocket URL 생성"""
+        domain = self.config.domain
+        protocol = self.config.protocol
+        
         return (
-            f"wss://skylinestart.evo-games.com/public/lobby/socket/v2/{self.config.bare_session_id}"
+            f"{protocol}://{domain}/public/lobby/socket/v2/{self.config.bare_session_id}"
             f"?messageFormat=json"
             f"&device=Desktop"
             f"&features=opensAt%2CmultipleHero%2CshortThumbnails%2CskipInfosPublished%2Csmc%2CuniRouletteHistory%2CbacHistoryV2%2Cfilters%2CtableDecorations"
@@ -98,9 +107,10 @@ class BaccaratWebSocketClient:
         url = self._build_websocket_url()
         logger.info(f"WebSocket 서버에 연결 중...")
         
+        
         # 브라우저와 동일한 인증 헤더 설정
         headers = {
-            "Origin": "https://skylinestart.evo-games.com",
+            "Origin": f"https://{self.config.domain}",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Cookie": f"EVOSESSIONID={self.config.session_id}"
         }
@@ -239,22 +249,80 @@ class BaccaratWebSocketClient:
     
     async def _process_message(self, data: Dict[str, Any]):
         """수신된 메시지 처리"""
-        msg_type = data.get("type", "unknown")
-        
-        # 외부 콜백 호출 (있는 경우)
-        if self.on_message_callback:
-            await self.on_message_callback(data)
-        
-        # lobby.historyUpdated 메시지 처리
-        if msg_type == "lobby.historyUpdated" and "args" in data:
-            args = data["args"]
-            for table_id, table_data in args.items():
-                if "results" in table_data:
-                    # 결과 정렬: x*7 + y 기준
-                    results = sorted(
-                        table_data["results"],
-                        key=lambda item: item["pos"][0] * 7 + item["pos"][1]
-                    )
+        try:
+            msg_type = data.get("type", "unknown")
+            
+            # 디버깅용 로그 추가
+            if msg_type == "lobby.historyUpdated" and "args" in data:
+                logger.debug(f"수신 데이터 구조 유형: {type(data['args'])}")
+                if isinstance(data['args'], dict) and len(data['args']) > 0:
+                    first_key = next(iter(data['args']))
+                    logger.debug(f"첫번째 테이블 데이터 구조: {type(data['args'][first_key])}")
+                    if 'results' in data['args'][first_key]:
+                        logger.debug(f"results 데이터 구조: {type(data['args'][first_key]['results'])}")
+                        if len(data['args'][first_key]['results']) > 0:
+                            logger.debug(f"첫번째 결과 예시: {data['args'][first_key]['results'][0]}")
+            
+            # 외부 콜백 호출 (있는 경우)
+            if self.on_message_callback:
+                await self.on_message_callback(data)
+            
+            # lobby.historyUpdated 메시지 처리
+            if msg_type == "lobby.historyUpdated" and "args" in data:
+                args = data["args"]
+                if not isinstance(args, dict):
+                    logger.warning(f"예상치 못한 args 데이터 형식: {type(args)}")
+                    return
+                    
+                for table_id, table_data in args.items():
+                    if not isinstance(table_data, dict) or "results" not in table_data:
+                        logger.warning(f"테이블 {table_id}: 데이터 형식 오류 또는 결과 없음")
+                        continue
+                        
+                    if not isinstance(table_data["results"], list):
+                        logger.warning(f"테이블 {table_id}: 예상치 못한 results 데이터 형식: {type(table_data['results'])}")
+                        continue
+                    
+                    # 결과가 비어있는 경우 건너뛰기
+                    if not table_data["results"]:
+                        continue
+                        
+                    # 결과 정렬 시도
+                    try:
+                        results = []
+                        for item in table_data["results"]:
+                            # pos 필드 확인
+                            if "pos" not in item:
+                                logger.warning(f"테이블 {table_id}: 'pos' 필드 없음: {item}")
+                                continue
+                                
+                            pos = item["pos"]
+                            if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+                                logger.warning(f"테이블 {table_id}: 잘못된 pos 형식: {pos}")
+                                continue
+                                
+                            try:
+                                # 정렬 키 계산 시도
+                                sort_key = pos[0] * 7 + pos[1]
+                                item["_sort_key"] = sort_key
+                                results.append(item)
+                            except (TypeError, IndexError) as e:
+                                logger.warning(f"테이블 {table_id}: 정렬 키 계산 오류: {e}, pos={pos}")
+                                continue
+                        
+                        # 정렬 수행
+                        if results:
+                            sorted_results = sorted(results, key=lambda x: x.get("_sort_key", 0))
+                            # _sort_key 제거
+                            for item in sorted_results:
+                                if "_sort_key" in item:
+                                    del item["_sort_key"]
+                        else:
+                            sorted_results = []
+                            
+                    except Exception as e:
+                        logger.warning(f"테이블 {table_id}: 결과 정렬 중 오류 발생: {e}")
+                        continue
 
                     display_name = self.room_mappings.get(table_id, table_id)
 
@@ -264,31 +332,75 @@ class BaccaratWebSocketClient:
                             continue
 
                     # 기존 저장된 결과와 다를 때만 출력
-                    if table_id not in self.received_tables or self.received_tables[table_id] != results:
-                        self.received_tables[table_id] = results
+                    if table_id not in self.received_tables or self.received_tables[table_id] != sorted_results:
+                        self.received_tables[table_id] = sorted_results
 
                         if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"📩 방 ID: {table_id} (이름: {display_name}) 결과 수신:")
+                            logger.debug(f"📩 방 ID: {table_id} (이름: {display_name}) 결과 수신: {len(sorted_results)}개")
 
-                            for idx, item in enumerate(results[-5:], start=len(results)-4):  # 최근 5개만 출력
-                                x, y = item['pos']
-                                c = item.get('c', ' ')
-                                winner = "Banker(뱅커)" if c == 'R' else ("Player(플레이어)" if c == 'B' else "알수없음")
-                                
-                                # 승자 외 추가 정보 (nat, ties, pp, bp 등) 확인
-                                extras = []
-                                if item.get('nat') == 1:
-                                    extras.append('Natural')
-                                if item.get('ties') == 1:
-                                    extras.append('Tie')
-                                if item.get('pp') == 1:
-                                    extras.append('Player Pair')
-                                if item.get('bp') == 1:
-                                    extras.append('Banker Pair')
+                            # 최근 결과 5개 출력
+                            recent_results = sorted_results[-5:] if len(sorted_results) >= 5 else sorted_results
+                            for idx, item in enumerate(recent_results, start=len(sorted_results)-len(recent_results)+1):
+                                try:
+                                    x, y = item.get('pos', [0, 0])
+                                    c = item.get('c', ' ')
+                                    winner = "Banker(뱅커)" if c == 'R' else ("Player(플레이어)" if c == 'B' else "알수없음")
+                                    
+                                    # 승자 외 추가 정보 (nat, ties, pp, bp 등) 확인
+                                    extras = []
+                                    if item.get('nat') == 1:
+                                        extras.append('Natural')
+                                    if item.get('ties') == 1:
+                                        extras.append('Tie')
+                                    if item.get('pp') == 1:
+                                        extras.append('Player Pair')
+                                    if item.get('bp') == 1:
+                                        extras.append('Banker Pair')
 
-                                extras_text = f" ({', '.join(extras)})" if extras else ""
-                                logger.debug(f"    {idx}번째 게임: pos=({x},{y}) → 승자={winner}{extras_text}")
-                                
+                                    extras_text = f" ({', '.join(extras)})" if extras else ""
+                                    logger.debug(f"    {idx}번째 게임: pos=({x},{y}) → 승자={winner}{extras_text}")
+                                except Exception as e:
+                                    logger.warning(f"결과 로깅 중 오류: {e}, 데이터: {item}")
+        
+        except Exception as e:
+            logger.error(f"메시지 처리 중 오류 발생: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def detect_session_expiry(self, error_message: str) -> bool:
+        """세션 만료 감지"""
+        if "403 Forbidden" in error_message or "rejected WebSocket connection" in error_message:
+            logger.warning("세션이 만료되었거나 유효하지 않습니다.")
+            return True
+        return False
+
+    async def _attempt_reconnect(self):
+        """웹소켓 재연결 시도"""
+        # 이미 최대 재시도 횟수를 초과한 경우
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            logger.error(f"최대 재연결 시도 횟수({self.max_reconnect_attempts}회)를 초과했습니다. 재연결을 중단합니다.")
+            return False
+        
+        # 마지막 재연결 시도 후 60초 이상 지났으면 재시도 횟수 초기화
+        now = datetime.now()
+        if (now - self.last_reconnect_attempt) > timedelta(seconds=60):
+            self.reconnect_attempts = 0
+        
+        self.reconnect_attempts += 1
+        self.last_reconnect_attempt = now
+        
+        # 세션 만료 확인
+        if self.reconnect_attempts >= 2:
+            logger.warning("재연결 반복 실패: 세션이 만료되었을 수 있습니다.")
+            # 여기서 세션 갱신 메커니즘 추가 가능
+        
+        # 백오프 지연 시간 계산 (1초, 2초, 4초...)
+        delay = 2 ** (self.reconnect_attempts - 1)
+        logger.info(f"재연결 시도 {self.reconnect_attempts}/{self.max_reconnect_attempts}... {delay}초 후 시도합니다.")
+        
+        await asyncio.sleep(delay)
+        return await self.connect()
+                         
 class LobbyMonitor:
     """바카라 로비 모니터링 매니저"""
     
@@ -439,60 +551,102 @@ class LobbyMonitor:
             "updated_at": datetime.now().isoformat()
         }
         
-        for room_id, results in room_data.items():
-            # 최소 결과 수 미만인 방은 무시
-            if len(results) < settings["min_results"]:
-                continue
-            
-            # 플레이어(B)/뱅커(R) 연속 횟수 계산
-            player_streak = 0
-            banker_streak = 0
-            
-            # 최근 결과부터 확인 (results는 순서대로 저장되어 있음)
-            latest_results = sorted(results, key=lambda x: (x["pos"][0] * 7 + x["pos"][1]), reverse=True)
-            
-            for result in latest_results:
-                c = result.get('c', '')
+        try:
+            for room_id, results in room_data.items():
+                # 최소 결과 수 미만인 방은 무시
+                if len(results) < settings["min_results"]:
+                    continue
                 
-                if c == 'B':  # 플레이어
-                    player_streak += 1
-                    banker_streak = 0
-                elif c == 'R':  # 뱅커
-                    banker_streak += 1
-                    player_streak = 0
-                else:
-                    # 타이 등 다른 결과는 연속 횟수 초기화
+                try:
+                    # 결과 정렬 함수
+                    def get_sort_key(result):
+                        try:
+                            pos = result.get("pos", [0, 0])
+                            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                                return pos[0] * 7 + pos[1]
+                            return 0
+                        except Exception:
+                            return 0
+                    
+                    # 시간순 정렬 (오래된 것부터 최신까지)
+                    sorted_results = sorted(results, key=get_sort_key)
+                    
+                    # 플레이어(B)/뱅커(R) 연속 횟수 계산
                     player_streak = 0
                     banker_streak = 0
-                
-                # 일정 횟수 이상 확인되면 루프 종료
-                if player_streak >= settings["player_streak"] or banker_streak >= settings["banker_streak"]:
-                    break
+                    
+                    # 결과 역순 (최신부터 오래된 순)으로 연속성 계산
+                    for result in reversed(sorted_results):
+                        # 'c' 필드가 없는 경우 건너뛰기
+                        if 'c' not in result:
+                            continue
+                            
+                        c = result.get('c', '')
+                        
+                        if c == 'B':  # 플레이어 승리
+                            player_streak += 1
+                            banker_streak = 0  # 뱅커 연속 초기화
+                        elif c == 'R':  # 뱅커 승리
+                            banker_streak += 1
+                            player_streak = 0  # 플레이어 연속 초기화
+                        else:
+                            # 타이 등 다른 결과는 연속 횟수 초기화
+                            player_streak = 0
+                            banker_streak = 0
+                        
+                        # 일정 횟수 이상 확인되면 루프 종료
+                        if player_streak >= settings["player_streak"] or banker_streak >= settings["banker_streak"]:
+                            break
+                    
+                    # 최근 게임 결과 문자열 생성 (최신 15개)
+                    recent_count = min(15, len(sorted_results))
+                    recent_results = sorted_results[-recent_count:]
+                    result_pattern = "".join([
+                        "P" if r.get('c', '') == 'B' else 
+                        ("B" if r.get('c', '') == 'R' else "T") 
+                        for r in recent_results
+                    ])
+                    
+                    room_name = room_mappings.get(room_id, room_id)
+                    
+                    # 디버깅 로그 추가
+                    logger.debug(f"방 {room_id} ({room_name}) - 패턴: {result_pattern}, " 
+                                f"P연속: {player_streak}, B연속: {banker_streak}")
+                    
+                    # 플레이어 연승 중인 방 (P가 연속으로 이김)
+                    if player_streak >= settings["player_streak"]:
+                        streak_rooms["player_streak_rooms"].append({
+                            "room_id": room_id,
+                            "room_name": room_name,
+                            "streak": player_streak,
+                            "recent_pattern": result_pattern
+                        })
+                    
+                    # 뱅커 연승 중인 방 (B가 연속으로 이김)
+                    if banker_streak >= settings["banker_streak"]:
+                        streak_rooms["banker_streak_rooms"].append({
+                            "room_id": room_id,
+                            "room_name": room_name,
+                            "streak": banker_streak,
+                            "recent_pattern": result_pattern
+                        })
+                except Exception as e:
+                    logger.warning(f"방 {room_id} 연속 패턴 계산 오류: {e}")
+                    import traceback
+                    logger.warning(traceback.format_exc())
+                    continue
             
-            room_name = room_mappings.get(room_id, room_id)
+            # 연패 횟수 기준 내림차순 정렬
+            streak_rooms["player_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
+            streak_rooms["banker_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
             
-            # 플레이어 연패 중인 방
-            if player_streak >= settings["player_streak"]:
-                streak_rooms["player_streak_rooms"].append({
-                    "room_id": room_id,
-                    "room_name": room_name,
-                    "streak": player_streak
-                })
-            
-            # 뱅커 연패 중인 방
-            if banker_streak >= settings["banker_streak"]:
-                streak_rooms["banker_streak_rooms"].append({
-                    "room_id": room_id,
-                    "room_name": room_name,
-                    "streak": banker_streak
-                })
-        
-        # 연패 횟수 기준 내림차순 정렬
-        streak_rooms["player_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
-        streak_rooms["banker_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
+        except Exception as e:
+            logger.error(f"연패 데이터 계산 중 오류 발생: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return streak_rooms
-    
+
     async def recalculate_streaks(self, user_id: str):
         """연패 데이터 재계산 및 전송"""
         if user_id not in self.clients or 'room_data' not in self.clients[user_id]:
@@ -549,34 +703,148 @@ class LobbyMonitor:
         async def on_message_callback(data: Dict[str, Any]):
             msg_type = data.get("type", "unknown")
             
+            # 디버깅 로그 추가 - 데이터 구조 이해 (안전하게 수정)
+            if msg_type == "lobby.historyUpdated" and "args" in data:
+                logger.debug(f"데이터 유형: {msg_type}, args 타입: {type(data['args'])}")
+                try:
+                    # 데이터 구조 샘플 로깅
+                    if isinstance(data["args"], dict) and data["args"]:
+                        first_key = next(iter(data["args"]))
+                        first_item = data["args"][first_key]
+                        logger.debug(f"첫 번째 항목 키: {first_key}, 값 타입: {type(first_item)}")
+                        if isinstance(first_item, dict) and "results" in first_item:
+                            logger.debug(f"results 타입: {type(first_item['results'])}")
+                            if first_item["results"] and len(first_item["results"]) > 0:
+                                first_result = first_item["results"][0]
+                                logger.debug(f"첫 번째 결과 구조: {first_result}")
+                                if isinstance(first_result, dict):
+                                    pos_value = first_result.get('pos', None)
+                                    logger.debug(f"pos 필드 타입: {type(pos_value)}")
+                                else:
+                                    logger.debug(f"첫 번째 결과가 딕셔너리가 아님: {type(first_result)}")
+                except Exception as e:
+                    logger.warning(f"디버깅 로그 생성 중 오류 (무시됨): {e}")
+            
             # 방 데이터 업데이트 처리
             if msg_type == "lobby.historyUpdated" and "args" in data:
-                args = data["args"]
-                updates = False
-                
-                for table_id, table_data in args.items():
-                    if "results" in table_data:
-                        # 결과 정렬: x*7 + y 기준
-                        results = sorted(
-                            table_data["results"],
-                            key=lambda item: item["pos"][0] * 7 + item["pos"][1]
-                        )
+                try:
+                    args = data["args"]
+                    updates = False
+                    
+                    if not isinstance(args, dict):
+                        logger.warning(f"예상치 못한 args 타입: {type(args)}")
+                        return
+                    
+                    # 허용된 방 목록 가져오기 (여기에 필터링 로직 추가됨)
+                    room_mappings = self.get_room_mappings(user_id)
+                    allowed_room_ids = set(room_mappings.keys())
+                    
+                    # 허용된 방 있을 때 로그
+                    if allowed_room_ids:
+                        logger.info(f"필터링 모드 활성화: {len(allowed_room_ids)}개 방만 모니터링")
+                    
+                    for table_id, table_data in args.items():
+                        # filtered_room_mappings.json에 있는 방만 처리 (핵심 필터링 로직)
+                        if allowed_room_ids and table_id not in allowed_room_ids:
+                            continue  # 허용 목록에 없는 방은 건너뛰기
+                        
+                        if not isinstance(table_data, dict) or "results" not in table_data:
+                            logger.warning(f"테이블 {table_id}: 잘못된 데이터 구조 또는 results 없음")
+                            continue
+                            
+                        results_data = table_data["results"]
+                        if not isinstance(results_data, list):
+                            logger.warning(f"테이블 {table_id}: results가 리스트가 아님: {type(results_data)}")
+                            continue
+                        
+                        # 결과 정렬 시도 (안전한 방식으로)
+                        try:
+                            processed_results = []
+                            
+                            for item in results_data:
+                                # 각 항목이 딕셔너리인지 확인
+                                if not isinstance(item, dict):
+                                    logger.warning(f"테이블 {table_id}: 결과 항목이 딕셔너리가 아님: {type(item)}")
+                                    continue
+                                    
+                                # pos 필드 안전하게 추출
+                                pos = item.get("pos")
+                                
+                                # pos 필드 형식 검증
+                                valid_pos = False
+                                sort_key = 0
+                                
+                                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                                    # 리스트/튜플 형식의 pos
+                                    try:
+                                        sort_key = pos[0] * 7 + pos[1]
+                                        valid_pos = True
+                                    except (TypeError, IndexError):
+                                        pass
+                                elif isinstance(pos, dict) and 'x' in pos and 'y' in pos:
+                                    # 딕셔너리 형식의 pos (x, y 키 사용)
+                                    try:
+                                        sort_key = pos['x'] * 7 + pos['y']
+                                        valid_pos = True
+                                    except (TypeError, KeyError):
+                                        pass
+                                elif isinstance(pos, str) and ',' in pos:
+                                    # 문자열 형식의 pos ("x,y")
+                                    try:
+                                        x, y = map(int, pos.split(','))
+                                        sort_key = x * 7 + y
+                                        valid_pos = True
+                                    except (ValueError, TypeError):
+                                        pass
+                                elif isinstance(pos, int):
+                                    # 정수 형식의 pos (이미 계산된 값)
+                                    sort_key = pos
+                                    valid_pos = True
+                                
+                                if valid_pos:
+                                    # 정렬을 위한 임시 키 추가
+                                    item_copy = item.copy()
+                                    item_copy["_sort_key"] = sort_key
+                                    processed_results.append(item_copy)
+                                else:
+                                    logger.warning(f"테이블 {table_id}: 지원되지 않는 pos 형식: {pos}")
+                            
+                            if processed_results:
+                                # 정렬 및 임시 키 제거
+                                results = sorted(processed_results, key=lambda x: x.get("_sort_key", 0))
+                                for r in results:
+                                    if "_sort_key" in r:
+                                        del r["_sort_key"]
+                            else:
+                                # 처리된 결과가 없으면 원본 그대로 사용
+                                results = results_data
+                                
+                        except Exception as e:
+                            logger.warning(f"테이블 {table_id}: 결과 정렬 실패: {str(e)}")
+                            # 정렬 실패 시 원본 데이터 사용
+                            results = results_data
                         
                         # 방 데이터 업데이트
                         self.clients[user_id]['room_data'][table_id] = results
                         updates = True
-                
-                # 연패 데이터 계산 및 브로드캐스트
-                if updates:
-                    room_data = self.clients[user_id]['room_data']
-                    streak_data = self.calculate_streaks(user_id, room_data)
                     
-                    # 웹소켓으로 데이터 전송
-                    await self.broadcast_to_user(user_id, {
-                        "type": "data_update",
-                        "streak_data": streak_data
-                    })
-        
+                    # 연패 데이터 계산 및 브로드캐스트
+                    if updates:
+                        room_data = self.clients[user_id]['room_data']
+                        streak_data = self.calculate_streaks(user_id, room_data)
+                        
+                        # 웹소켓으로 데이터 전송
+                        await self.broadcast_to_user(user_id, {
+                            "type": "data_update",
+                            "streak_data": streak_data
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"메시지 처리 중 오류: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    
+       
         # 클라이언트 생성
         client = BaccaratWebSocketClient(
             config=config,
@@ -653,4 +921,26 @@ class LobbyMonitor:
         self.clients[user_id]['task'] = None
         self.clients[user_id]['client'] = None
         
+        return True
+    
+    # LobbyMonitor 클래스에 추가할 메서드
+    def set_session_config_from_url(self, user_id: str, ws_url: str) -> bool:
+        """URL에서 세션 설정 추출하여 저장"""
+        # utils/url_extractor.py의 메서드 사용
+        from utils.url_extractor import URLExtractor
+        
+        config_data = URLExtractor.extract_baccarat_config(ws_url)
+        if not config_data:
+            return False
+        
+        config = ClientConfig(
+            session_id=config_data["session_id"],
+            bare_session_id=config_data["bare_session_id"],
+            instance=config_data["instance"],
+            client_version=config_data["client_version"],
+            domain=config_data.get("domain", "skylinestart.evo-games.com"),
+            protocol=config_data.get("protocol", "wss")
+        )
+        
+        self.session_configs[user_id] = config
         return True

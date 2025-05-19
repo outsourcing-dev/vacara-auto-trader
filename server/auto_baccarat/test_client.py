@@ -6,22 +6,64 @@ import time
 import sys
 from datetime import datetime
 import argparse
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 # 서버 URL 설정 (기본값)
 BASE_URL = "http://localhost:8080"
 WS_URL = "ws://localhost:8080/ws/baccarat"
 
+def is_valid_url(url):
+    """URL 유효성 검사"""
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except Exception:
+        return False
+
+def normalize_url(url):
+    """URL 정규화"""
+    if not url:
+        return None
+    
+    # http:// 접두사 확인 및 추가
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "http://" + url
+    
+    try:
+        # URL 파싱 및 재구성
+        parsed = urlparse(url)
+        # 경로가 없으면 / 추가
+        if not parsed.path:
+            parts = list(parsed)
+            parts[2] = "/"
+            url = urlunparse(parts)
+        return url
+    except Exception as e:
+        print(f"URL 정규화 오류: {e}")
+        return None
+
 def extract_baccarat_config(ws_url):
     """WebSocket URL에서 바카라 설정 정보 추출"""
+    if not ws_url:
+        print("WebSocket URL이 제공되지 않았습니다.")
+        return None
+    
+    if not ws_url.startswith("ws://") and not ws_url.startswith("wss://"):
+        print("유효하지 않은 WebSocket URL입니다. ws:// 또는 wss://로 시작해야 합니다.")
+        return None
+    
     try:
         # URL 파싱
         parsed_url = urlparse(ws_url)
         query_params = parse_qs(parsed_url.query)
         
+        # 도메인 및 프로토콜 추출
+        domain = parsed_url.netloc
+        protocol = parsed_url.scheme
+        
         # 경로에서 bare_session_id 추출
         path_parts = parsed_url.path.split('/')
-        bare_session_id = path_parts[-1]
+        bare_session_id = path_parts[-1] if path_parts else ""
         
         # 쿼리 파라미터에서 값 추출
         session_id = query_params.get('EVOSESSIONID', [''])[0]
@@ -33,52 +75,57 @@ def extract_baccarat_config(ws_url):
         client_version = query_params.get('client_version', [''])[0]
         
         # 필수 값 확인
-        if not all([bare_session_id, session_id, instance, client_version]):
-            print("URL에서 필수 설정값을 추출할 수 없습니다.")
-            print(f"bare_session_id: {bare_session_id}")
-            print(f"session_id: {session_id}")
-            print(f"instance: {instance}")
-            print(f"client_version: {client_version}")
+        missing_fields = []
+        if not bare_session_id:
+            missing_fields.append("bare_session_id")
+        if not session_id:
+            missing_fields.append("session_id")
+        if not instance:
+            missing_fields.append("instance")
+        if not client_version:
+            missing_fields.append("client_version")
+        if not domain:
+            missing_fields.append("domain")
+        if not protocol:
+            missing_fields.append("protocol")
+            
+        if missing_fields:
+            error_msg = f"다음 필수 설정값이 URL에서 추출되지 않았습니다: {', '.join(missing_fields)}"
+            print(error_msg)
             return None
         
+        # 모든 필드가 있는 경우 설정 반환
         return {
             "session_id": session_id,
             "bare_session_id": bare_session_id,
             "instance": instance,
-            "client_version": client_version
+            "client_version": client_version,
+            "domain": domain,
+            "protocol": protocol
         }
     except Exception as e:
         print(f"URL 파싱 오류: {e}")
         return None
 
-async def test_baccarat_api(user_id, ws_url=None, monitoring_time=60):
+
+async def test_baccarat_api(user_id, ws_url=None, monitoring_time=None):
     print("=== 바카라 API 테스트 시작 ===")
     
     # 1. 세션 설정
     print("\n1. 세션 설정")
     
-    if ws_url:
-        # URL에서 설정 추출
-        config = extract_baccarat_config(ws_url)
-        if not config:
-            print("유효하지 않은 URL입니다. 기본값을 사용합니다.")
-            config = {
-                "session_id": "s2rqzokhx5pxl6z6s3gwwsr2ynjfu62m029164bfe2f358b6214e0765d7ab5fa955eaae2fea107d75",
-                "bare_session_id": "s2rqzokhx5pxl6z6",
-                "instance": "7lwa0y",
-                "client_version": "6.20250512.70248.51685-c40cdf22de",
-                "user_id": user_id
-            }
-    else:
-        # 기본값 사용
-        print("기본값 사용")
-        config = {
-            "session_id": "s2rqzokhx5pxl6z6s3gwwsr2ynjfu62m029164bfe2f358b6214e0765d7ab5fa955eaae2fea107d75",
-            "bare_session_id": "s2rqzokhx5pxl6z6",
-            "instance": "7lwa0y",
-            "client_version": "6.20250512.70248.51685-c40cdf22de",
-            "user_id": user_id
-        }
+    if not ws_url:
+        print("웹소켓 URL이 필요합니다.")
+        return
+    
+    # URL에서 설정 추출
+    config = extract_baccarat_config(ws_url)
+    if not config:
+        print("유효하지 않은 URL입니다. 필요한 모든 설정 정보가 포함된 URL을 제공해주세요.")
+        return
+    
+    # 사용자 ID 추가
+    config["user_id"] = user_id
     
     print("\n추출된 설정 정보:")
     for key, value in config.items():
@@ -97,8 +144,25 @@ async def test_baccarat_api(user_id, ws_url=None, monitoring_time=60):
         min_results = 10
     
     # 설정 전송
-    response = requests.post(f"{BASE_URL}/api/baccarat/config", json=config)
-    print_response(response)
+    print("\n서버로 설정 전송 중...")
+    try:
+        response = requests.post(f"{BASE_URL}/api/baccarat/config", json=config)
+        print_response(response)
+        
+        if response.status_code != 200:
+            print("세션 설정 전송 실패. 프로그램을 종료합니다.")
+            return
+    except requests.exceptions.InvalidURL:
+        print(f"유효하지 않은 서버 URL: {BASE_URL}")
+        print("서버 URL 형식을 확인하세요. (예: http://localhost:8080)")
+        return
+    except requests.exceptions.ConnectionError:
+        print(f"서버 연결 실패: {BASE_URL}")
+        print("서버가 실행 중인지 확인하세요.")
+        return
+    except Exception as e:
+        print(f"설정 전송 중 오류 발생: {e}")
+        return
     
     # 연패 설정 전송
     streak_settings = {
@@ -108,8 +172,16 @@ async def test_baccarat_api(user_id, ws_url=None, monitoring_time=60):
         "user_id": user_id
     }
     
-    response = requests.post(f"{BASE_URL}/api/baccarat/streak-settings", json=streak_settings)
-    print_response(response)
+    try:
+        response = requests.post(f"{BASE_URL}/api/baccarat/streak-settings", json=streak_settings)
+        print_response(response)
+        
+        if response.status_code != 200:
+            print("연패 설정 전송 실패. 프로그램을 종료합니다.")
+            return
+    except Exception as e:
+        print(f"연패 설정 전송 중 오류 발생: {e}")
+        return
     
     # 3. WebSocket 연결 준비
     print("\n3. WebSocket 연결 시작")
@@ -117,68 +189,109 @@ async def test_baccarat_api(user_id, ws_url=None, monitoring_time=60):
     
     # 4. 바카라 클라이언트 시작
     print("\n4. 바카라 클라이언트 시작")
-    response = requests.post(f"{BASE_URL}/api/baccarat/start/{user_id}")
-    print_response(response)
-    
-    # 5. 모니터링 (데이터 수집)
-    print(f"\n5. {monitoring_time}초간 데이터 수집 중...")
-    
-    # 진행 표시
-    for i in range(monitoring_time):
-        if i % 10 == 0:
-            # 10초마다 현재 데이터 조회
-            response = requests.get(f"{BASE_URL}/api/baccarat/data/{user_id}")
-            print(f"\n현재 데이터 ({datetime.now().strftime('%H:%M:%S')}):")
-            data = response.json()
-            if "streak_data" in data.get("monitor_data", {}):
-                streak_data = data["monitor_data"]["streak_data"]
-                print(f"  플레이어 연패 방: {len(streak_data.get('player_streak_rooms', []))}개")
-                print(f"  뱅커 연패 방: {len(streak_data.get('banker_streak_rooms', []))}개")
-                
-                # 연패 방이 있으면 상세 정보 출력
-                player_rooms = streak_data.get('player_streak_rooms', [])
-                if player_rooms:
-                    print(f"  [플레이어 연패 방]")
-                    for idx, room in enumerate(player_rooms[:3], 1):  # 최대 3개만 표시
-                        print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
-                    if len(player_rooms) > 3:
-                        print(f"    ... 외 {len(player_rooms) - 3}개")
-                
-                banker_rooms = streak_data.get('banker_streak_rooms', [])
-                if banker_rooms:
-                    print(f"  [뱅커 연패 방]")
-                    for idx, room in enumerate(banker_rooms[:3], 1):  # 최대 3개만 표시
-                        print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
-                    if len(banker_rooms) > 3:
-                        print(f"    ... 외 {len(banker_rooms) - 3}개")
-        
-        print(".", end="", flush=True)
-        await asyncio.sleep(1)
-    
-    # 6. 바카라 클라이언트 중지
-    print("\n\n6. 바카라 클라이언트 중지")
-    response = requests.post(f"{BASE_URL}/api/baccarat/stop/{user_id}")
-    print_response(response)
-    
-    # 7. 최종 데이터 조회
-    print("\n7. 최종 데이터 조회")
-    response = requests.get(f"{BASE_URL}/api/baccarat/data/{user_id}")
-    print_response(response, show_data=True)
-    
-    # WebSocket 태스크 종료
-    websocket_task.cancel()
     try:
-        await websocket_task
-    except asyncio.CancelledError:
-        pass
+        response = requests.post(f"{BASE_URL}/api/baccarat/start/{user_id}")
+        print_response(response)
+        
+        if response.status_code != 200 or (hasattr(response, 'json') and response.json().get('status') == 'error'):
+            print("바카라 클라이언트 시작 실패. 프로그램을 종료합니다.")
+            websocket_task.cancel()
+            try:
+                await websocket_task
+            except asyncio.CancelledError:
+                pass
+            return
+    except Exception as e:
+        print(f"클라이언트 시작 중 오류 발생: {e}")
+        websocket_task.cancel()
+        try:
+            await websocket_task
+        except asyncio.CancelledError:
+            pass
+        return
     
-    print("\n=== 바카라 API 테스트 완료 ===")
-
+    # 5. 모니터링 (데이터 수집) - 무한 루프로 변경
+    print("\n5. 무제한 모니터링 시작...")
+    print("(Ctrl+C를 누르면 즉시 종료)")
+    
+    try:
+        # 진행 표시 - 무한 루프로 변경
+        i = 0
+        while True:
+            if i % 10 == 0 and i > 0:
+                # 10초마다 현재 데이터 조회
+                try:
+                    response = requests.get(f"{BASE_URL}/api/baccarat/data/{user_id}")
+                    print(f"\n현재 데이터 ({datetime.now().strftime('%H:%M:%S')}):")
+                    
+                    data = response.json()
+                    if "monitor_data" in data and "streak_data" in data["monitor_data"]:
+                        streak_data = data["monitor_data"]["streak_data"]
+                        print(f"  플레이어 연패 방: {len(streak_data.get('player_streak_rooms', []))}개")
+                        print(f"  뱅커 연패 방: {len(streak_data.get('banker_streak_rooms', []))}개")
+                        
+                        # 연패 방이 있으면 상세 정보 출력
+                        player_rooms = streak_data.get('player_streak_rooms', [])
+                        if player_rooms:
+                            print(f"  [플레이어 연패 방]")
+                            for idx, room in enumerate(player_rooms[:3], 1):  # 최대 3개만 표시
+                                print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
+                            if len(player_rooms) > 3:
+                                print(f"    ... 외 {len(player_rooms) - 3}개")
+                        
+                        banker_rooms = streak_data.get('banker_streak_rooms', [])
+                        if banker_rooms:
+                            print(f"  [뱅커 연패 방]")
+                            for idx, room in enumerate(banker_rooms[:3], 1):  # 최대 3개만 표시
+                                print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
+                            if len(banker_rooms) > 3:
+                                print(f"    ... 외 {len(banker_rooms) - 3}개")
+                    else:
+                        print("  모니터링 데이터가 없습니다.")
+                except Exception as e:
+                    print(f"  데이터 조회 오류: {e}")
+            
+            print(".", end="", flush=True)
+            await asyncio.sleep(1)
+            i += 1  # 카운터 증가
+    
+    except KeyboardInterrupt:
+        print("\n\n사용자에 의해 중단되었습니다.")
+        
+    finally:
+        # 6. 바카라 클라이언트 중지
+        print("\n\n6. 바카라 클라이언트 중지")
+        try:
+            response = requests.post(f"{BASE_URL}/api/baccarat/stop/{user_id}")
+            print_response(response)
+        except Exception as e:
+            print(f"클라이언트 중지 중 오류 발생: {e}")
+        
+        # 7. 최종 데이터 조회
+        print("\n7. 최종 데이터 조회")
+        try:
+            response = requests.get(f"{BASE_URL}/api/baccarat/data/{user_id}")
+            print_response(response, show_data=True)
+        except Exception as e:
+            print(f"데이터 조회 중 오류 발생: {e}")
+        
+        # WebSocket 태스크 종료
+        websocket_task.cancel()
+        try:
+            await websocket_task
+        except asyncio.CancelledError:
+            pass
+        
+        print("\n=== 바카라 API 테스트 완료 ===")
+        
 async def websocket_client(user_id):
     """WebSocket 클라이언트"""
     try:
-        async with websockets.connect(f"{WS_URL}/{user_id}") as websocket:
-            print(f"WebSocket 연결 성공: {WS_URL}/{user_id}")
+        ws_url = f"{WS_URL}/{user_id}"
+        print(f"WebSocket 연결 시도: {ws_url}")
+        
+        async with websockets.connect(ws_url) as websocket:
+            print(f"WebSocket 연결 성공: {ws_url}")
             
             # 메시지 수신 루프
             while True:
@@ -267,130 +380,58 @@ def print_response(response, show_data=False):
         print(f"응답 파싱 오류: {e}")
         print(f"원본 응답: {response.text}")
 
-async def auto_setup(ws_url, user_id, monitoring_time=60):
-    """WebSocket URL로부터 자동 설정 및 실행"""
-    print("=== 바카라 모니터링 시작 ===")
-    print("WebSocket URL에서 설정을 추출하여 모니터링을 시작합니다.")
+def get_server_url():
+    """서버 URL 설정"""
+    default_url = "http://localhost:8080"
+    server_url = input(f"서버 URL을 입력하세요 (기본값: {default_url}): ") or default_url
     
-    # URL에서 설정 추출
-    config = extract_baccarat_config(ws_url)
-    if not config:
-        print("유효하지 않은 URL입니다. 종료합니다.")
-        return
+    # URL 정규화
+    normalized_url = normalize_url(server_url)
+    if not normalized_url:
+        print(f"유효하지 않은 URL 형식: {server_url}")
+        print(f"기본값 {default_url}을 사용합니다.")
+        return default_url
     
-    # 사용자 ID 설정
-    config["user_id"] = user_id
+    # URL 유효성 검사
+    if not is_valid_url(normalized_url):
+        print(f"유효하지 않은 URL: {normalized_url}")
+        print(f"기본값 {default_url}을 사용합니다.")
+        return default_url
     
-    print("\n추출된 설정 정보:")
-    for key, value in config.items():
-        print(f"  {key}: {value}")
-    
-    # 세션 설정 전송
-    print("\n세션 설정 전송 중...")
-    response = requests.post(f"{BASE_URL}/api/baccarat/config", json=config)
-    if response.status_code != 200:
-        print(f"세션 설정 전송 실패: {response.text}")
-        return
-    
-    # 기본 연패 설정
-    streak_settings = {
-        "player_streak": 3,
-        "banker_streak": 3,
-        "min_results": 10,
-        "user_id": user_id
-    }
-    
-    print("\n연패 설정 전송 중...")
-    response = requests.post(f"{BASE_URL}/api/baccarat/streak-settings", json=streak_settings)
-    if response.status_code != 200:
-        print(f"연패 설정 전송 실패: {response.text}")
-        return
-    
-    # WebSocket 연결
-    print("\nWebSocket 연결 시작...")
-    websocket_task = asyncio.create_task(websocket_client(user_id))
-    
-    # 클라이언트 시작
-    print("\n바카라 클라이언트 시작...")
-    response = requests.post(f"{BASE_URL}/api/baccarat/start/{user_id}")
-    if response.status_code != 200:
-        print(f"클라이언트 시작 실패: {response.text}")
-        websocket_task.cancel()
-        try:
-            await websocket_task
-        except asyncio.CancelledError:
-            pass
-        return
-    
-    # 모니터링
-    print(f"\n{monitoring_time}초간 모니터링 중...")
-    print("(Ctrl+C를 누르면 즉시 종료)")
-    try:
-        for i in range(monitoring_time):
-            if i % 10 == 0 and i > 0:
-                # 10초마다 데이터 조회
-                response = requests.get(f"{BASE_URL}/api/baccarat/data/{user_id}")
-                data = response.json()
-                if "monitor_data" in data and "streak_data" in data["monitor_data"]:
-                    streak_data = data["monitor_data"]["streak_data"]
-                    player_count = len(streak_data.get("player_streak_rooms", []))
-                    banker_count = len(streak_data.get("banker_streak_rooms", []))
-                    print(f"\n현재 감지된 연패 방 수: P:{player_count}, B:{banker_count}")
-                    
-                    # 연패 방이 있으면 상세 정보 출력
-                    player_rooms = streak_data.get('player_streak_rooms', [])
-                    if player_rooms:
-                        print(f"  [플레이어 연패 방]")
-                        for idx, room in enumerate(player_rooms[:3], 1):  # 최대 3개만 표시
-                            print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
-                        if len(player_rooms) > 3:
-                            print(f"    ... 외 {len(player_rooms) - 3}개")
-                    
-                    banker_rooms = streak_data.get('banker_streak_rooms', [])
-                    if banker_rooms:
-                        print(f"  [뱅커 연패 방]")
-                        for idx, room in enumerate(banker_rooms[:3], 1):  # 최대 3개만 표시
-                            print(f"    {idx}. {room['room_name']} - {room['streak']}연속")
-                        if len(banker_rooms) > 3:
-                            print(f"    ... 외 {len(banker_rooms) - 3}개")
-            
-            print(".", end="", flush=True)
-            await asyncio.sleep(1)
-    
-    except KeyboardInterrupt:
-        print("\n\n사용자에 의해 중단되었습니다.")
-    finally:
-        # 클라이언트 중지
-        print("\n\n바카라 클라이언트 중지 중...")
-        requests.post(f"{BASE_URL}/api/baccarat/stop/{user_id}")
-        
-        # WebSocket 연결 종료
-        websocket_task.cancel()
-        try:
-            await websocket_task
-        except asyncio.CancelledError:
-            pass
-        
-        print("\n=== 바카라 모니터링 종료 ===")
+    return normalized_url
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='바카라 API 테스트 클라이언트')
-    parser.add_argument('url', help='바카라 WebSocket URL (필수)')
-    parser.add_argument('--user', '-i', default='test_user_1', help='사용자 ID')
-    parser.add_argument('--time', '-t', type=int, default=60, help='모니터링 시간(초)')
-    parser.add_argument('--server', '-s', default='http://localhost:8080', help='서버 URL')
-    
-    args = parser.parse_args()
+    print("=== 바카라 자동 모니터링 클라이언트 ===")
     
     # 서버 URL 설정
-    BASE_URL = args.server
+    BASE_URL = get_server_url()
     WS_URL = f"ws://{BASE_URL.replace('http://', '').replace('https://', '')}/ws/baccarat"
     
-    # WebSocket URL이 제공되었는지 확인
-    if not args.url:
-        print("오류: 바카라 WebSocket URL이 필요합니다.")
-        print("예시: python test_client.py \"wss://skylinestart.evo-games.com/public/lobby/socket/v2/...\"")
+    print(f"서버 URL: {BASE_URL}")
+    print(f"WebSocket URL: {WS_URL}")
+    
+    # WebSocket URL 입력 받기
+    print("\n바카라 WebSocket URL 입력")
+    print("예시: wss://skylinestart.evo-games.com/public/lobby/socket/v2/...")
+    ws_url = input("WebSocket URL: ")
+    
+    if not ws_url:
+        print("\n오류: WebSocket URL이 필요합니다. 프로그램을 종료합니다.")
         sys.exit(1)
     
-    # 자동 설정 모드로 실행
-    asyncio.run(auto_setup(args.url, args.user, args.time))
+    # 사용자 ID 입력 받기
+    user_id = input("\n사용자 ID를 입력하세요 (기본값: test_user_1): ") or "test_user_1"
+    
+    # 모니터링 시간 입력 받기
+    try:
+        monitoring_time = int(input("\n모니터링 시간(초)을 입력하세요 (기본값: 60): ") or "60")
+    except ValueError:
+        print("유효하지 않은 입력입니다. 기본값 60초를 사용합니다.")
+        monitoring_time = 60
+    
+    # 테스트 실행
+    try:
+        asyncio.run(test_baccarat_api(user_id, ws_url, monitoring_time))
+    except Exception as e:
+        print(f"\n예상치 못한 오류 발생: {e}")
+        sys.exit(1)

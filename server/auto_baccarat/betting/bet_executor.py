@@ -39,6 +39,14 @@ class RoomWebSocketClient:
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 3
         
+        # 도메인 추출
+        try:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(room_ws_url)
+            self.domain = parsed_url.netloc
+        except Exception:
+            self.domain = "skylinestart.evo-games.com"  # 기본값
+        
         # 콜백 함수
         self.on_message_callback = on_message_callback
         
@@ -52,7 +60,7 @@ class RoomWebSocketClient:
         
         # 브라우저와 동일한 인증 헤더 설정
         headers = {
-            "Origin": "https://skylinestart.evo-games.com",
+            "Origin": f"https://{self.domain}",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         }
         
