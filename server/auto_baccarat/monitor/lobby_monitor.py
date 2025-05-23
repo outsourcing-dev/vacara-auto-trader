@@ -16,7 +16,7 @@ from fastapi import WebSocket
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levellevel)s - %(message)s',
 )
 logger = logging.getLogger("lobby_monitor")
 
@@ -213,7 +213,7 @@ class BaccaratWebSocketClient:
             logger.info(f"Connection closed by server: {e}")
             self.is_connected = False
             # 정상적인 종료가 아닌 경우 재연결 시도
-            if e.code != 1000:  # 1000은 정상 종료
+            if e.code != 1000: 
                 await self._attempt_reconnect()
             
         except asyncio.CancelledError:
@@ -279,40 +279,42 @@ class BaccaratWebSocketClient:
                         logger.warning(f"테이블 {table_id}: 데이터 형식 오류 또는 결과 없음")
                         continue
                         
-                    if not isinstance(table_data["results"], list):
-                        logger.warning(f"테이블 {table_id}: 예상치 못한 results 데이터 형식: {type(table_data['results'])}")
+                    results = table_data["results"]
+                    if not isinstance(results, list):
+                        logger.warning(f"테이블 {table_id}: results가 리스트가 아님: {type(results)}")
                         continue
                     
                     # 결과가 비어있는 경우 건너뛰기
-                    if not table_data["results"]:
+                    if not results:
                         continue
                         
                     # 결과 정렬 시도
                     try:
-                        results = []
-                        for item in table_data["results"]:
-                            # pos 필드 확인
-                            if "pos" not in item:
-                                logger.warning(f"테이블 {table_id}: 'pos' 필드 없음: {item}")
+                        sorted_results = []
+                        for item in results:
+                            # 각 항목이 딕셔너리인지 확인
+                            if not isinstance(item, dict):
+                                logger.warning(f"테이블 {table_id}: 결과 항목이 딕셔너리가 아님: {type(item)}")
                                 continue
-                                
-                            pos = item["pos"]
+                            
+                            # pos 필드 확인 및 검증
+                            pos = item.get("pos")
                             if not isinstance(pos, (list, tuple)) or len(pos) < 2:
                                 logger.warning(f"테이블 {table_id}: 잘못된 pos 형식: {pos}")
                                 continue
-                                
+                            
+                            # 정렬 키 계산
                             try:
-                                # 정렬 키 계산 시도
                                 sort_key = pos[0] * 7 + pos[1]
                                 item["_sort_key"] = sort_key
-                                results.append(item)
+                                sorted_results.append(item)
                             except (TypeError, IndexError) as e:
                                 logger.warning(f"테이블 {table_id}: 정렬 키 계산 오류: {e}, pos={pos}")
                                 continue
                         
                         # 정렬 수행
-                        if results:
-                            sorted_results = sorted(results, key=lambda x: x.get("_sort_key", 0))
+                        if sorted_results:
+                            sorted_results = sorted(sorted_results, key=lambda x: x.get("_sort_key", 0))
                             # _sort_key 제거
                             for item in sorted_results:
                                 if "_sort_key" in item:
@@ -401,6 +403,8 @@ class BaccaratWebSocketClient:
         await asyncio.sleep(delay)
         return await self.connect()
                          
+from prediction.choice_pick_engine import ChoicePickEngine  # ChoicePickEngine 임포트
+
 class LobbyMonitor:
     """바카라 로비 모니터링 매니저"""
     
@@ -532,121 +536,95 @@ class LobbyMonitor:
         
         return self.clients[user_id]['room_data'].get(room_id)
     
-    def calculate_streaks(self, user_id: str, room_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
-        """연패 데이터 계산"""
+    def calculate_streaks(self, user_id: str, room_data: Dict[str, List[Dict[str, Any]]], streak_threshold: int = 2) -> Dict[str, Any]:
+        """연패 데이터 계산 및 필터링"""
         if user_id not in self.streak_settings:
             # 기본 설정 사용
             self.streak_settings[user_id] = {
-                "player_streak": 3,  # 플레이어 연패 기준
-                "banker_streak": 3,  # 뱅커 연패 기준
-                "min_results": 10,   # 최소 결과 수
+                "player_streak": streak_threshold,  # 플레이어 연패 기준
+                "banker_streak": streak_threshold,  # 뱅커 연패 기준
+                "min_results": 15 + streak_threshold,  # 최소 결과 수 (15 + 연패 기준)
             }
-        
+
         settings = self.streak_settings[user_id]
+        settings["min_results"] = 15 + streak_threshold  # 동적으로 최소 결과 수 계산
         room_mappings = self.get_room_mappings(user_id)
-        
         streak_rooms = {
-            "player_streak_rooms": [],  # 플레이어 연패 중인 방
-            "banker_streak_rooms": [],  # 뱅커 연패 중인 방
+            "player_streak_rooms": [],
+            "banker_streak_rooms": [],
             "updated_at": datetime.now().isoformat()
         }
-        
+
         try:
             for room_id, results in room_data.items():
                 # 최소 결과 수 미만인 방은 무시
-                if len(results) < settings["min_results"]:
+                if not isinstance(results, list) or len(results) < settings["min_results"]:
+                    logger.warning(f"테이블 {room_id}: 결과 데이터가 리스트가 아니거나 부족합니다.")
                     continue
-                
-                try:
-                    # 결과 정렬 함수
-                    def get_sort_key(result):
-                        try:
-                            pos = result.get("pos", [0, 0])
-                            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
-                                return pos[0] * 7 + pos[1]
-                            return 0
-                        except Exception:
-                            return 0
-                    
-                    # 시간순 정렬 (오래된 것부터 최신까지)
-                    sorted_results = sorted(results, key=get_sort_key)
-                    
-                    # 플레이어(B)/뱅커(R) 연속 횟수 계산
-                    player_streak = 0
-                    banker_streak = 0
-                    
-                    # 결과 역순 (최신부터 오래된 순)으로 연속성 계산
-                    for result in reversed(sorted_results):
-                        # 'c' 필드가 없는 경우 건너뛰기
-                        if 'c' not in result:
-                            continue
-                            
-                        c = result.get('c', '')
-                        
-                        if c == 'B':  # 플레이어 승리
-                            player_streak += 1
-                            banker_streak = 0  # 뱅커 연속 초기화
-                        elif c == 'R':  # 뱅커 승리
-                            banker_streak += 1
-                            player_streak = 0  # 플레이어 연속 초기화
-                        else:
-                            # 타이 등 다른 결과는 연속 횟수 초기화
-                            player_streak = 0
-                            banker_streak = 0
-                        
-                        # 일정 횟수 이상 확인되면 루프 종료
-                        if player_streak >= settings["player_streak"] or banker_streak >= settings["banker_streak"]:
-                            break
-                    
-                    # 최근 게임 결과 문자열 생성 (최신 15개)
-                    recent_count = min(15, len(sorted_results))
-                    recent_results = sorted_results[-recent_count:]
-                    result_pattern = "".join([
-                        "P" if r.get('c', '') == 'B' else 
-                        ("B" if r.get('c', '') == 'R' else "T") 
-                        for r in recent_results
-                    ])
-                    
-                    room_name = room_mappings.get(room_id, room_id)
-                    
-                    # 디버깅 로그 추가
-                    logger.debug(f"방 {room_id} ({room_name}) - 패턴: {result_pattern}, " 
-                                f"P연속: {player_streak}, B연속: {banker_streak}")
-                    
-                    # 플레이어 연승 중인 방 (P가 연속으로 이김)
-                    if player_streak >= settings["player_streak"]:
-                        streak_rooms["player_streak_rooms"].append({
-                            "room_id": room_id,
-                            "room_name": room_name,
-                            "streak": player_streak,
-                            "recent_pattern": result_pattern
-                        })
-                    
-                    # 뱅커 연승 중인 방 (B가 연속으로 이김)
-                    if banker_streak >= settings["banker_streak"]:
-                        streak_rooms["banker_streak_rooms"].append({
-                            "room_id": room_id,
-                            "room_name": room_name,
-                            "streak": banker_streak,
-                            "recent_pattern": result_pattern
-                        })
-                except Exception as e:
-                    logger.warning(f"방 {room_id} 연속 패턴 계산 오류: {e}")
-                    import traceback
-                    logger.warning(traceback.format_exc())
-                    continue
-            
+
+                # 결과 리스트 초기화
+                result_comparisons = []
+
+                # 각 픽 예측 및 비교
+                for start_idx in range(len(results) - 15):
+                    recent_results = results[start_idx:start_idx + 15]
+                    next_result = results[start_idx + 15]
+
+                    # 예측 픽 생성
+                    engine = ChoicePickEngine()
+                    engine.add_results(["P" if r.get("c") == "B" else "B" for r in recent_results])
+                    if not engine.has_enough_data():
+                        continue
+
+                    try:
+                        predicted_pick = engine.predict()
+                        actual_result = next_result.get("c")
+
+                        # 예측 결과와 실제 결과 비교
+                        is_win = predicted_pick == actual_result
+                        result_comparisons.append(is_win)
+
+                        # 로그 출력
+                        room_name = room_mappings.get(room_id, room_id)
+                        logger.info(
+                            f"방: {room_name} (ID: {room_id}), 픽 번호: {start_idx + 16}, "
+                            f"예측 픽: {predicted_pick}, 실제 결과: {actual_result}, "
+                            f"결과: {'승' if is_win else '패'}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"테이블 {room_id}: 예측 중 오류 발생: {e}")
+                        continue
+
+                # 연패 판단
+                streak_count = 0
+                max_streak = 0
+                for is_win in result_comparisons:
+                    if not is_win:
+                        streak_count += 1
+                        max_streak = max(max_streak, streak_count)
+                    else:
+                        streak_count = 0
+
+                # 연패 조건 만족 시 방 추가
+                room_name = room_mappings.get(room_id, room_id)
+                if max_streak >= streak_threshold:
+                    streak_rooms["player_streak_rooms"].append({
+                        "room_id": room_id,
+                        "room_name": room_name,
+                        "streak": max_streak,
+                        "recent_pattern": "".join(["W" if r else "L" for r in result_comparisons])
+                    })
+
             # 연패 횟수 기준 내림차순 정렬
             streak_rooms["player_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
-            streak_rooms["banker_streak_rooms"].sort(key=lambda x: x["streak"], reverse=True)
-            
+
         except Exception as e:
             logger.error(f"연패 데이터 계산 중 오류 발생: {e}")
             import traceback
             logger.error(traceback.format_exc())
-        
-        return streak_rooms
 
+        return streak_rooms
+    
     async def recalculate_streaks(self, user_id: str):
         """연패 데이터 재계산 및 전송"""
         if user_id not in self.clients or 'room_data' not in self.clients[user_id]:

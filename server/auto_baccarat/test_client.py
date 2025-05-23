@@ -400,38 +400,105 @@ def get_server_url():
     
     return normalized_url
 
+async def test_baccarat_predictions(user_id, ws_url=None):
+    print("=== 바카라 예측 테스트 시작 ===")
+
+    # 1. 세션 설정
+    print("\n1. 세션 설정")
+    if not ws_url:
+        print("웹소켓 URL이 필요합니다.")
+        return
+
+    # URL에서 설정 추출
+    config = extract_baccarat_config(ws_url)
+    if not config:
+        print("유효하지 않은 URL입니다. 필요한 모든 설정 정보가 포함된 URL을 제공해주세요.")
+        return
+
+    # 사용자 ID 추가
+    config["user_id"] = user_id
+
+    print("\n추출된 설정 정보:")
+    for key, value in config.items():
+        print(f"  {key}: {value}")
+
+    # 2. 테스트 데이터 준비
+    print("\n2. 테스트 데이터 준비")
+    test_results = [
+        "P", "B", "P", "P", "B", "B", "P", "B", "P", "P",
+        "B", "B", "P", "P", "B", "P", "B"  # 총 17개 데이터
+    ]
+    print(f"테스트 데이터 (총 {len(test_results)}개): {test_results}")
+
+    # 3. ChoicePickEngine 초기화
+    print("\n3. ChoicePickEngine 초기화")
+    from prediction.choice_pick_engine import ChoicePickEngine
+    engine = ChoicePickEngine()
+
+    # 4. 데이터 추가 및 예측
+    print("\n4. 데이터 추가 및 예측")
+    predictions = []
+    win_loss_results = []
+
+    for i in range(len(test_results) - 15):
+        # 최신 15개 데이터 추가
+        recent_results = test_results[i:i + 15]
+        engine.add_results(recent_results)
+
+        # 예측 수행
+        predicted_pick = engine.predict()
+        actual_result = test_results[i + 15]
+
+        # 예측 결과와 실제 결과 비교
+        is_win = predicted_pick == actual_result
+        win_loss_results.append("승" if is_win else "패")
+
+        # 예측 픽 저장
+        predictions.append(predicted_pick)
+
+        # 로그 출력
+        print(f"\n[예측 {i + 1}]")
+        print(f"  최근 15개 데이터: {recent_results}")
+        print(f"  예측 픽: {predicted_pick}")
+        print(f"  실제 결과: {actual_result}")
+        print(f"  결과: {'승' if is_win else '패'}")
+
+    # 5. 결과 출력
+    print("\n5. 최종 결과 출력")
+    print("\n[15개 픽 - 예측 픽]")
+    for i, (recent, pred) in enumerate(zip(test_results[:len(predictions)], predictions), 1):
+        print(f"  {i}. {recent} → {pred}")
+
+    print("\n[승/패 결과]")
+    print("  " + " | ".join(win_loss_results))
+
+    print("\n=== 바카라 예측 테스트 완료 ===")
+
 if __name__ == "__main__":
     print("=== 바카라 자동 모니터링 클라이언트 ===")
-    
+
     # 서버 URL 설정
     BASE_URL = get_server_url()
     WS_URL = f"ws://{BASE_URL.replace('http://', '').replace('https://', '')}/ws/baccarat"
-    
+
     print(f"서버 URL: {BASE_URL}")
     print(f"WebSocket URL: {WS_URL}")
-    
+
     # WebSocket URL 입력 받기
     print("\n바카라 WebSocket URL 입력")
     print("예시: wss://skylinestart.evo-games.com/public/lobby/socket/v2/...")
     ws_url = input("WebSocket URL: ")
-    
+
     if not ws_url:
         print("\n오류: WebSocket URL이 필요합니다. 프로그램을 종료합니다.")
         sys.exit(1)
-    
+
     # 사용자 ID 입력 받기
     user_id = input("\n사용자 ID를 입력하세요 (기본값: test_user_1): ") or "test_user_1"
-    
-    # 모니터링 시간 입력 받기
-    try:
-        monitoring_time = int(input("\n모니터링 시간(초)을 입력하세요 (기본값: 60): ") or "60")
-    except ValueError:
-        print("유효하지 않은 입력입니다. 기본값 60초를 사용합니다.")
-        monitoring_time = 60
-    
+
     # 테스트 실행
     try:
-        asyncio.run(test_baccarat_api(user_id, ws_url, monitoring_time))
+        asyncio.run(test_baccarat_predictions(user_id, ws_url))
     except Exception as e:
         print(f"\n예상치 못한 오류 발생: {e}")
         sys.exit(1)
