@@ -13,11 +13,9 @@ import uvicorn
 # 상위 디렉토리 모듈 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# 공통 모듈 임포트
+# 공통 모듈 임포트 (리팩토링된 버전)
 from common.config import Config
 from monitor.lobby_monitor import LobbyMonitor, ClientConfig
-from betting.bet_executor import BettingExecutor
-from prediction.prediction_engine import PredictionEngine
 
 # 로깅 설정
 logging.basicConfig(
@@ -27,23 +25,21 @@ logging.basicConfig(
 logger = logging.getLogger("baccarat_server")
 
 # FastAPI 앱 생성
-app = FastAPI(title="Vacara Auto Baccarat API Server")
+app = FastAPI(title="Vacara Auto Baccarat API Server (Simple Version)")
 
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 실제 배포 시 더 제한적으로 설정
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 글로벌 매니저 인스턴스
+# 글로벌 매니저 인스턴스 (간소화)
 lobby_manager = LobbyMonitor()
-betting_manager = BettingExecutor()
-prediction_engine = PredictionEngine()
 
-# 요청 모델들
+# 요청 모델들 (간소화)
 class SessionConfig(BaseModel):
     session_id: str
     bare_session_id: str
@@ -51,34 +47,15 @@ class SessionConfig(BaseModel):
     client_version: str
     user_id: str
 
-class BettingConfig(BaseModel):
-    room_id: str
-    room_websocket_url: Optional[str] = None
-    user_id: str
-    amount: int = 1000
-    max_rounds: int = 10
-    strategy: str = "follow_streak"  # 베팅 전략
-
-class PredictionSettings(BaseModel):
-    algorithm: str = "pattern_recognition"  # 예측 알고리즘
-    sample_size: int = 15  # 패턴 분석에 사용할 샘플 크기
-    user_id: str
-
-class StreakSettings(BaseModel):
-    player_streak: int = 3
-    banker_streak: int = 3
-    min_results: int = 10
-    user_id: str
-
 # API 엔드포인트: 상태 확인
 @app.get("/api/status")
 async def get_status():
     return {
         "status": "running",
-        "version": "1.0.0",
+        "version": "1.0.0-simple",
         "timestamp": datetime.now().isoformat(),
         "active_monitors": lobby_manager.get_active_monitors_count(),
-        "active_bettings": betting_manager.get_active_bettings_count()
+        "description": "Simple room monitoring without prediction"
     }
 
 # WebSocket 연결 엔드포인트: 로비 모니터링
@@ -92,17 +69,6 @@ async def baccarat_websocket(websocket: WebSocket, user_id: str):
             _ = await websocket.receive_text()
     except WebSocketDisconnect:
         lobby_manager.unregister_websocket(user_id, websocket)
-
-# WebSocket 연결 엔드포인트: 베팅 모니터링
-@app.websocket("/ws/betting/{user_id}/{room_id}")
-async def betting_websocket(websocket: WebSocket, user_id: str, room_id: str):
-    await betting_manager.register_websocket(user_id, room_id, websocket)
-    
-    try:
-        while True:
-            _ = await websocket.receive_text()
-    except WebSocketDisconnect:
-        betting_manager.unregister_websocket(user_id, room_id, websocket)
 
 #############################
 # 로비 모니터링 엔드포인트 #
@@ -122,40 +88,13 @@ async def set_baccarat_config(config: SessionConfig):
     
     return {"status": "success", "message": "세션 설정이 저장되었습니다."}
 
-# API 엔드포인트: 연패 설정
-@app.post("/api/baccarat/streak-settings")
-async def set_streak_settings(settings: StreakSettings):
-    lobby_manager.set_streak_settings(settings.user_id, {
-        "player_streak": settings.player_streak,
-        "banker_streak": settings.banker_streak,
-        "min_results": settings.min_results
-    })
-    
-    # 설정 변경 즉시 연패 데이터 재계산 및 전송
-    await lobby_manager.recalculate_streaks(settings.user_id)
-    
-    return {"status": "success", "message": "연패 설정이 저장되었습니다."}
-
-# API 엔드포인트: 예측 알고리즘 설정
-@app.post("/api/baccarat/prediction-settings")
-async def set_prediction_settings(settings: PredictionSettings):
-    prediction_engine.set_algorithm_settings(settings.user_id, {
-        "algorithm": settings.algorithm,
-        "sample_size": settings.sample_size
-    })
-    
-    # 설정 변경 즉시 예측 데이터 재계산 및 전송
-    await lobby_manager.recalculate_predictions(settings.user_id)
-    
-    return {"status": "success", "message": "예측 알고리즘 설정이 저장되었습니다."}
-
 # API 엔드포인트: 로비 모니터링 시작
 @app.post("/api/baccarat/start/{user_id}")
 async def start_baccarat_monitor(user_id: str):
     if not lobby_manager.has_session_config(user_id):
         return {"status": "error", "message": "세션 설정이 필요합니다."}
     
-    success = await lobby_manager.start_client(user_id, prediction_engine)
+    success = await lobby_manager.start_client(user_id)
     
     if success:
         return {"status": "success", "message": "바카라 로비 모니터링이 시작되었습니다."}
@@ -172,7 +111,7 @@ async def stop_baccarat_monitor(user_id: str):
     else:
         return {"status": "error", "message": "바카라 로비 모니터링이 실행 중이 아닙니다."}
 
-# API 엔드포인트: 바카라 데이터 조회
+# API 엔드포인트: 바카라 데이터 조회 (간소화)
 @app.get("/api/baccarat/data/{user_id}")
 async def get_baccarat_data(user_id: str):
     if not lobby_manager.has_user_data(user_id):
@@ -186,7 +125,7 @@ async def get_baccarat_data(user_id: str):
         "monitor_data": monitor_data
     }
 
-# API 엔드포인트: 방 매핑 및 필터링 설정
+# API 엔드포인트: 방 매핑 설정
 @app.post("/api/baccarat/room-mappings/{user_id}")
 async def set_room_mappings(user_id: str, request: Request):
     mappings = await request.json()
@@ -197,68 +136,6 @@ async def set_room_mappings(user_id: str, request: Request):
     lobby_manager.set_room_mappings(user_id, mappings)
     
     return {"status": "success", "message": "방 매핑이 저장되었습니다."}
-
-#############################
-# 베팅 실행 엔드포인트 #
-#############################
-
-# API 엔드포인트: 베팅 설정
-@app.post("/api/baccarat/betting-config")
-async def set_betting_config(config: BettingConfig):
-    betting_manager.set_betting_config(config.user_id, config.room_id, {
-        "amount": config.amount,
-        "max_rounds": config.max_rounds,
-        "strategy": config.strategy,
-        "room_websocket_url": config.room_websocket_url
-    })
-    
-    return {"status": "success", "message": "베팅 설정이 저장되었습니다."}
-
-# API 엔드포인트: 베팅 시작
-@app.post("/api/baccarat/betting/start/{user_id}/{room_id}")
-async def start_betting(user_id: str, room_id: str):
-    if not betting_manager.has_betting_config(user_id, room_id):
-        return {"status": "error", "message": "베팅 설정이 필요합니다."}
-    
-    # 로비 모니터 데이터 가져오기
-    room_data = lobby_manager.get_room_data(user_id, room_id)
-    if not room_data:
-        return {"status": "error", "message": "해당 방에 대한 데이터가 없습니다."}
-    
-    # 예측 엔진 설정
-    prediction_config = prediction_engine.get_algorithm_settings(user_id)
-    
-    # 베팅 시작
-    success = await betting_manager.start_betting(user_id, room_id, room_data, prediction_config)
-    
-    if success:
-        return {"status": "success", "message": f"{room_id} 방에서 베팅이 시작되었습니다."}
-    else:
-        return {"status": "error", "message": "베팅 시작 실패. 설정을 확인하세요."}
-
-# API 엔드포인트: 베팅 중지
-@app.post("/api/baccarat/betting/stop/{user_id}/{room_id}")
-async def stop_betting(user_id: str, room_id: str):
-    success = await betting_manager.stop_betting(user_id, room_id)
-    
-    if success:
-        return {"status": "success", "message": f"{room_id} 방에서 베팅이 중지되었습니다."}
-    else:
-        return {"status": "error", "message": "베팅이 실행 중이 아닙니다."}
-
-# API 엔드포인트: 베팅 데이터 조회
-@app.get("/api/baccarat/betting/data/{user_id}/{room_id}")
-async def get_betting_data(user_id: str, room_id: str):
-    if not betting_manager.has_betting_data(user_id, room_id):
-        return {"status": "error", "message": "베팅 데이터가 없습니다."}
-    
-    betting_data = betting_manager.get_betting_data(user_id, room_id)
-    
-    return {
-        "status": "success",
-        "is_running": betting_manager.is_betting_running(user_id, room_id),
-        "betting_data": betting_data
-    }
 
 # 웹소켓 URL에서 설정 추출 유틸리티
 @app.post("/api/utils/extract-config")
@@ -302,7 +179,7 @@ async def extract_config_from_url(request: Request):
 
 @app.get("/api/baccarat/room-data/{user_id}/{room_id}")
 async def get_room_raw_data(user_id: str, room_id: str):
-    """특정 방의 상세 데이터 조회 (디버깅용)"""
+    """특정 방의 상세 데이터 조회"""
     if not lobby_manager.has_user_data(user_id):
         return {"status": "error", "message": "사용자 데이터가 없습니다."}
     
@@ -325,14 +202,23 @@ async def get_room_raw_data(user_id: str, room_id: str):
         # 전체 결과 정렬 시도
         sorted_results = sorted(room_data, key=get_sort_key)
         
-        # 최근 15개 결과 추출
-        recent_results = sorted_results[-15:] if len(sorted_results) >= 15 else sorted_results
-        
         # 결과를 읽기 쉬운 형태로 변환
         readable_results = []
-        for result in recent_results:
+        result_pattern = []
+        
+        for result in sorted_results:
             c = result.get('c', '')
-            winner = "Player" if c == 'B' else ("Banker" if c == 'R' else "Tie/Other")
+            if c == 'B':  # Player 승리
+                winner = "Player"
+                pattern_char = "P"
+            elif c == 'R':  # Banker 승리
+                winner = "Banker"
+                pattern_char = "B"
+            else:  # Tie 또는 기타
+                winner = "Tie/Other"
+                pattern_char = "T"
+            
+            result_pattern.append(pattern_char)
             
             extras = []
             if result.get('nat') == 1:
@@ -350,37 +236,30 @@ async def get_room_raw_data(user_id: str, room_id: str):
                 "extras": extras,
                 "raw_code": c
             })
-            
-        # 결과 패턴 문자열 (과거 -> 최근 순)
-        result_pattern = "".join([
-            "P" if r.get('c', '') == 'B' else ("B" if r.get('c', '') == 'R' else "T") 
-            for r in sorted_results[-15:]
-        ])
         
         # 결과 통계
         total_games = len(sorted_results)
-        recent_count = len(recent_results)
-        
-        player_wins = sum(1 for r in recent_results if r.get('c', '') == 'B')
-        banker_wins = sum(1 for r in recent_results if r.get('c', '') == 'R')
-        ties = recent_count - player_wins - banker_wins
+        player_wins = result_pattern.count('P')
+        banker_wins = result_pattern.count('B')
+        ties = result_pattern.count('T')
         
         return {
             "status": "success", 
             "room_id": room_id, 
             "room_name": lobby_manager.get_room_mappings(user_id).get(room_id, room_id),
             "total_games": total_games,
-            "recent_count": recent_count,
-            "result_pattern": result_pattern,
+            "result_pattern": "".join(result_pattern),
+            "recent_20": "".join(result_pattern[-20:]) if len(result_pattern) >= 20 else "".join(result_pattern),
             "stats": {
                 "player_wins": player_wins,
                 "banker_wins": banker_wins,
                 "ties": ties,
-                "player_rate": round(player_wins / recent_count * 100, 1) if recent_count > 0 else 0,
-                "banker_rate": round(banker_wins / recent_count * 100, 1) if recent_count > 0 else 0
+                "player_rate": round(player_wins / total_games * 100, 1) if total_games > 0 else 0,
+                "banker_rate": round(banker_wins / total_games * 100, 1) if total_games > 0 else 0,
+                "tie_rate": round(ties / total_games * 100, 1) if total_games > 0 else 0
             },
-            "readable_results": readable_results,
-            "raw_data_sample": sorted_results[:3] if sorted_results else []  # 원시 데이터 일부 포함
+            "readable_results": readable_results[-10:] if len(readable_results) >= 10 else readable_results,  # 최근 10개만
+            "raw_data_sample": sorted_results[:3] if sorted_results else []
         }
     except Exception as e:
         logger.error(f"방 데이터 처리 중 오류 발생: {e}")
@@ -395,7 +274,42 @@ async def get_room_raw_data(user_id: str, room_id: str):
             "sample_data": room_data[:2] if room_data else [],
             "error_trace": error_trace
         }
-        
+
+# API 엔드포인트: 방 요약 정보 출력
+@app.get("/api/baccarat/summary/{user_id}")
+async def get_rooms_summary(user_id: str):
+    """모든 필터링된 방의 요약 정보 조회"""
+    if not lobby_manager.has_user_data(user_id):
+        return {"status": "error", "message": "사용자 데이터가 없습니다."}
+    
+    monitor_data = lobby_manager.get_monitor_data(user_id)
+    filtered_rooms = monitor_data.get("filtered_rooms", [])
+    
+    if not filtered_rooms:
+        return {
+            "status": "success",
+            "message": "필터링된 방이 없습니다.",
+            "total_rooms": 0,
+            "rooms": []
+        }
+    
+    return {
+        "status": "success",
+        "total_rooms": len(filtered_rooms),
+        "rooms": filtered_rooms,
+        "updated_at": monitor_data.get("updated_at"),
+        "pattern_legend": {
+            "P": "Player 승리",
+            "B": "Banker 승리", 
+            "T": "Tie"
+        }
+    }
+
 if __name__ == "__main__":
     # 서버 실행
+    print("🎰 Vacara Auto Baccarat Server (Simple Version) 시작")
+    print("📊 기능: 필터링된 방 모니터링 (예측픽 제거)")
+    print("🔗 API 문서: http://localhost:8080/docs")
+    print("=" * 50)
+    
     uvicorn.run("server:app", host="0.0.0.0", port=8080, reload=False)
