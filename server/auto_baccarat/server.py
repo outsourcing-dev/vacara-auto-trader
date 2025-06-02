@@ -9,9 +9,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+from prediction.streak_analyzer import StreakAnalyzer
 
 # 상위 디렉토리 모듈 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+streak_analyzer = StreakAnalyzer()
 
 # 공통 모듈 임포트 (리팩토링된 버전)
 from common.config import Config
@@ -305,6 +307,176 @@ async def get_rooms_summary(user_id: str):
         }
     }
 
+# server.py에 추가할 코드
+
+# 기존 import에 추가
+from prediction.streak_analyzer import StreakAnalyzer
+
+# 기존 글로벌 매니저 인스턴스에 추가
+streak_analyzer = StreakAnalyzer()
+
+# 요청 모델 추가
+class StreakPredictionRequest(BaseModel):
+    streak_count: int = 3  # 연패 기준 (기본값 3)
+    user_id: str
+
+#############################
+# 연패 예측 분석 엔드포인트 #
+#############################
+
+@app.post("/api/baccarat/find-streak-rooms")
+async def find_streak_rooms(request: StreakPredictionRequest):
+    """
+    연패 조건에 맞는 방 찾기
+    
+    Args:
+        request: 연패 기준과 사용자 ID
+        
+    Returns:
+        연패 조건 만족하는 방 목록과 분석 통계
+    """
+    user_id = request.user_id
+    streak_count = request.streak_count
+    
+    # 사용자 데이터 확인
+    if not lobby_manager.has_user_data(user_id):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"사용자 {user_id}의 데이터가 없습니다. 먼저 로비 모니터링을 시작하세요."
+        )
+    
+    # 사용자의 방 데이터 가져오기
+    if user_id not in lobby_manager.clients or 'room_data' not in lobby_manager.clients[user_id]:
+        raise HTTPException(
+            status_code=400,
+            detail="방 데이터가 없습니다. 로비 모니터링이 실행 중인지 확인하세요."
+        )
+    
+    room_data = lobby_manager.clients[user_id]['room_data']
+    room_mappings = lobby_manager.get_room_mappings(user_id)
+    
+    # 연패 방 분석 시작
+    logger.info(f"사용자 {user_id}의 {streak_count}연패 방 분석 시작")
+    
+    try:
+        # 분석 통계 먼저 계산
+        statistics = streak_analyzer.get_analysis_statistics(room_data, streak_count)
+        
+        # 연패 방 찾기
+        streak_rooms = streak_analyzer.find_streak_rooms(
+            room_data, room_mappings, streak_count
+        )
+        
+        # 분석 결과 요약 로그
+        summary = streak_analyzer.format_analysis_summary(streak_rooms, statistics)
+        logger.info(f"\n{summary}")
+        
+        # 응답 데이터 구성
+        response_data = {
+            "status": "success",
+            "streak_count": streak_count,
+            "analysis_statistics": statistics,
+            "streak_rooms": streak_rooms,
+            "total_found": len(streak_rooms),
+            "analysis_summary": summary
+        }
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"연패 방 분석 중 오류 발생: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"연패 방 분석 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@app.get("/api/baccarat/streak-analysis-stats/{user_id}")
+async def get_streak_analysis_stats(user_id: str, streak_count: int = 3):
+    """
+    연패 분석 통계만 조회 (실제 분석 없이 통계 정보만)
+    """
+    if not lobby_manager.has_user_data(user_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"사용자 {user_id}의 데이터가 없습니다."
+        )
+    
+    room_data = lobby_manager.clients[user_id].get('room_data', {})
+    
+    if not room_data:
+        raise HTTPException(
+            status_code=400,
+            detail="방 데이터가 없습니다."
+        )
+    
+    try:
+        statistics = streak_analyzer.get_analysis_statistics(room_data, streak_count)
+        
+        return {
+            "status": "success",
+            "statistics": statistics,
+            "message": f"총 {statistics['total_rooms']}개 방 중 {statistics['sufficient_data_rooms']}개 방이 분석 가능합니다."
+        }
+        
+    except Exception as e:
+        logger.error(f"연패 분석 통계 조회 오류: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"통계 조회 중 오류가 발생했습니다: {str(e)}"
+        )
+
+@app.get("/api/baccarat/room-prediction-test/{user_id}/{room_id}")
+async def test_room_prediction(user_id: str, room_id: str, streak_count: int = 3):
+    """
+    특정 방의 연패 예측 테스트 (디버깅용)
+    """
+    if not lobby_manager.has_user_data(user_id):
+        raise HTTPException(status_code=400, detail="사용자 데이터가 없습니다.")
+    
+    room_data = lobby_manager.clients[user_id].get('room_data', {})
+    room_mappings = lobby_manager.get_room_mappings(user_id)
+    
+    if room_id not in room_data:
+        raise HTTPException(status_code=404, detail=f"방 {room_id}의 데이터가 없습니다.")
+    
+    try:
+        raw_results = room_data[room_id]
+        room_name = room_mappings.get(room_id, room_id)
+        
+        # 결과 필터링
+        filtered_results = streak_analyzer._filter_results(raw_results)
+        
+        # 연패 예측 검증
+        validation_result = streak_analyzer.validator.validate_streak_predictions(
+            filtered_results, streak_count
+        )
+        
+        # 상세 로그 생성
+        detailed_log = streak_analyzer.validator.format_prediction_log(
+            room_id, room_name, filtered_results, validation_result
+        )
+        
+        return {
+            "status": "success",
+            "room_id": room_id,
+            "room_name": room_name,
+            "total_games": len(filtered_results),
+            "filtered_results": ''.join(filtered_results),
+            "validation_result": validation_result,
+            "detailed_log": detailed_log,
+            "is_streak_room": validation_result["is_streak"]
+        }
+        
+    except Exception as e:
+        logger.error(f"방 예측 테스트 오류: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"테스트 중 오류가 발생했습니다: {str(e)}"
+        )
+        
 if __name__ == "__main__":
     # 서버 실행
     print("🎰 Vacara Auto Baccarat Server (Simple Version) 시작")
