@@ -95,78 +95,120 @@ def extract_baccarat_config(ws_url):
         print(f"URL 파싱 오류: {e}")
         return None
 
-async def test_streak_analysis(user_id, streak_count=3):
-    """연패 분석 테스트"""
-    print(f"\n=== {streak_count}연패 방 분석 테스트 ===")
+async def continuous_streak_monitor(user_id, streak_count=3, check_interval=30):
+    """
+    연패 조건에 맞는 방이 나올 때까지 무한 루프로 모니터링
     
-    # 1. 분석 통계 먼저 확인
-    print("\n1. 분석 통계 조회")
-    try:
-        response = requests.get(
-            f"{BASE_URL}/api/baccarat/streak-analysis-stats/{user_id}",
-            params={"streak_count": streak_count}
-        )
-        
-        if response.status_code == 200:
-            stats = response.json()
-            print(f"✅ 통계 조회 성공:")
-            statistics = stats.get("statistics", {})
-            print(f"   총 방 수: {statistics.get('total_rooms', 0)}개")
-            print(f"   분석 가능: {statistics.get('sufficient_data_rooms', 0)}개")
-            print(f"   데이터 부족: {statistics.get('insufficient_data_rooms', 0)}개")
-            print(f"   최소 필요 게임 수: {statistics.get('min_required_games', 0)}게임")
-        else:
-            print(f"❌ 통계 조회 실패: {response.status_code}")
-            print_response(response)
-            return
-            
-    except Exception as e:
-        print(f"❌ 통계 조회 오류: {e}")
-        return
+    Args:
+        user_id: 사용자 ID
+        streak_count: 연패 기준
+        check_interval: 체크 간격 (초)
+    """
+    print(f"\n=== {streak_count}연패 방 무한 모니터링 시작 ===")
+    print(f"체크 간격: {check_interval}초")
+    print("조건에 맞는 방이 나올 때까지 계속 모니터링합니다...")
+    print("중단하려면 Ctrl+C를 누르세요.\n")
     
-    # 2. 실제 연패 방 분석 실행
-    print(f"\n2. {streak_count}연패 방 분석 실행")
+    loop_count = 0
+    start_time = datetime.now()
+    
     try:
-        response = requests.post(
-            f"{BASE_URL}/api/baccarat/find-streak-rooms",
-            json={
-                "streak_count": streak_count,
-                "user_id": user_id
-            }
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            print(f"✅ 분석 완료!")
+        while True:
+            loop_count += 1
+            current_time = datetime.now()
+            elapsed = current_time - start_time
             
-            total_found = result.get("total_found", 0)
-            streak_rooms = result.get("streak_rooms", [])
+            print(f"[{current_time.strftime('%H:%M:%S')}] 🔍 {loop_count}번째 체크 (경과시간: {elapsed})")
             
-            print(f"\n🎯 {streak_count}연패 조건 만족: {total_found}개 방")
-            
-            if streak_rooms:
-                print("\n📋 연패 방 목록:")
-                for i, room in enumerate(streak_rooms, 1):
-                    print(f"   {i}. {room['room_name']}")
-                    print(f"      - 총 게임: {room['total_games']}게임")
-                    print(f"      - 연패: {room['streak_failures']}회")
-                    print(f"      - 예측: {room['predictions']}")
-                    print(f"      - 실제: {room['actual_results']}")
-                    
-                # 첫 번째 방 상세 테스트
-                if len(streak_rooms) > 0:
-                    first_room = streak_rooms[0]
-                    print(f"\n3. 첫 번째 방 상세 테스트: {first_room['room_name']}")
-                    await test_single_room_prediction(user_id, first_room['room_id'], streak_count)
-            else:
-                print("   조건에 맞는 방이 없습니다.")
+            try:
+                # 연패 방 분석 실행
+                response = requests.post(
+                    f"{BASE_URL}/api/baccarat/find-streak-rooms",
+                    json={
+                        "streak_count": streak_count,
+                        "user_id": user_id
+                    },
+                    timeout=30  # 30초 타임아웃
+                )
                 
-        else:
-            print(f"❌ 분석 실패: {response.status_code}")
-            print_response(response)
+                if response.status_code == 200:
+                    result = response.json()
+                    total_found = result.get("total_found", 0)
+                    streak_rooms = result.get("streak_rooms", [])
+                    statistics = result.get("analysis_statistics", {})
+                    
+                    # 통계 정보 출력
+                    total_rooms = statistics.get("total_rooms", 0)
+                    sufficient_rooms = statistics.get("sufficient_data_rooms", 0)
+                    
+                    print(f"   📊 분석 완료: 총 {total_rooms}개 방 중 {sufficient_rooms}개 방 분석")
+                    
+                    if total_found > 0:
+                        print(f"\n🎯 {streak_count}연패 조건 만족하는 방 발견! ({total_found}개)")
+                        print("=" * 50)
+                        
+                        for i, room in enumerate(streak_rooms, 1):
+                            print(f"{i}. 🏠 {room['room_name']}")
+                            print(f"   📈 총 게임: {room['total_games']}게임")
+                            print(f"   🔥 연패: {room['streak_failures']}회")
+                            print(f"   🎲 예측: {room['predictions']}")
+                            print(f"   ✅ 실제: {room['actual_results']}")
+                            print(f"   📝 요약: {room['analysis_summary']}")
+                            print()
+                        
+                        print("=" * 50)
+                        print(f"✅ 모니터링 완료! {total_found}개 방에서 {streak_count}연패 조건 만족")
+                        
+                        # 첫 번째 방에 대한 추가 상세 정보
+                        if len(streak_rooms) > 0:
+                            first_room = streak_rooms[0]
+                            print(f"\n🔍 첫 번째 방 상세 분석: {first_room['room_name']}")
+                            await test_single_room_prediction(user_id, first_room['room_id'], streak_count)
+                        
+                        break  # 조건에 맞는 방을 찾았으므로 루프 종료
+                    else:
+                        print(f"   ❌ {streak_count}연패 조건에 맞는 방 없음")
+                        
+                        # 상위 연패 방이 있다면 표시
+                        if statistics.get("sufficient_data_rooms", 0) > 0:
+                            # 기존 연패 데이터 확인 (3연패 기준)
+                            default_response = requests.post(
+                                f"{BASE_URL}/api/baccarat/find-streak-rooms",
+                                json={
+                                    "streak_count": 3,
+                                    "user_id": user_id
+                                },
+                                timeout=15
+                            )
+                            
+                            if default_response.status_code == 200:
+                                default_result = default_response.json()
+                                default_rooms = default_result.get("streak_rooms", [])
+                                if default_rooms:
+                                    print(f"   💡 참고: 3연패 조건 만족 방은 {len(default_rooms)}개 있음")
+                
+                else:
+                    print(f"   ⚠️ API 오류: {response.status_code}")
+                    if response.status_code == 400:
+                        error_data = response.json()
+                        print(f"   오류 메시지: {error_data.get('detail', 'Unknown error')}")
+                    
+            except requests.exceptions.Timeout:
+                print("   ⏰ 요청 타임아웃 (30초 초과)")
+            except requests.exceptions.RequestException as e:
+                print(f"   🔌 네트워크 오류: {e}")
+            except Exception as e:
+                print(f"   ❌ 예상치 못한 오류: {e}")
             
+            # 다음 체크까지 대기
+            print(f"   ⏳ {check_interval}초 후 다시 체크...")
+            await asyncio.sleep(check_interval)
+            
+    except KeyboardInterrupt:
+        print(f"\n\n⏹️  사용자에 의해 모니터링이 중단되었습니다.")
+        print(f"📊 총 {loop_count}번 체크, 경과시간: {datetime.now() - start_time}")
     except Exception as e:
-        print(f"❌ 분석 오류: {e}")
+        print(f"\n❌ 모니터링 중 오류 발생: {e}")
 
 async def test_single_room_prediction(user_id, room_id, streak_count=3):
     """단일 방 예측 테스트"""
@@ -197,10 +239,10 @@ async def test_single_room_prediction(user_id, room_id, streak_count=3):
     except Exception as e:
         print(f"❌ 방 테스트 오류: {e}")
 
-async def test_baccarat_api_with_streak_analysis(user_id, ws_url=None):
-    """바카라 API + 연패 분석 통합 테스트"""
+async def test_baccarat_continuous_monitoring(user_id, ws_url=None):
+    """바카라 무한 연패 모니터링 테스트"""
     
-    print("=== 바카라 모니터링 + 연패 분석 테스트 ===")
+    print("=== 바카라 무한 연패 모니터링 시스템 ===")
     
     # 1. 세션 설정
     if not ws_url:
@@ -239,31 +281,31 @@ async def test_baccarat_api_with_streak_analysis(user_id, ws_url=None):
         websocket_task.cancel()
         return
     
-    print("\n✅ 모니터링 시작됨. 데이터 수집 중...")
+    print("\n✅ 모니터링 시작됨. 초기 데이터 수집 중...")
     
     try:
-        # 데이터 수집을 위해 30초 대기
+        # 초기 데이터 수집을 위해 30초 대기
         await asyncio.sleep(30)
         
-        # 연패 분석 테스트
+        # 연패 기준 설정
         try:
             streak_count = int(input("\n연패 기준을 입력하세요 (기본값: 3): ") or "3")
         except ValueError:
             streak_count = 3
         
-        await test_streak_analysis(user_id, streak_count)
+        # 체크 간격 설정
+        try:
+            check_interval = int(input(f"체크 간격을 입력하세요 (초, 기본값: 30): ") or "30")
+        except ValueError:
+            check_interval = 30
         
-        # 추가 분석 옵션
-        while True:
-            continue_analysis = input(f"\n다른 연패 기준으로 분석하시겠습니까? (y/n): ").lower()
-            if continue_analysis == 'y':
-                try:
-                    new_streak_count = int(input("새로운 연패 기준: "))
-                    await test_streak_analysis(user_id, new_streak_count)
-                except ValueError:
-                    print("유효하지 않은 입력입니다.")
-            else:
-                break
+        print(f"\n🎯 설정 완료:")
+        print(f"   연패 기준: {streak_count}연패")
+        print(f"   체크 간격: {check_interval}초")
+        print(f"   필터링된 방: filtered_room_mappings.json 기준")
+        
+        # 무한 모니터링 시작
+        await continuous_streak_monitor(user_id, streak_count, check_interval)
                 
     except KeyboardInterrupt:
         print("\n\n사용자에 의해 중단되었습니다.")
@@ -272,6 +314,7 @@ async def test_baccarat_api_with_streak_analysis(user_id, ws_url=None):
         # 정리
         try:
             requests.post(f"{BASE_URL}/api/baccarat/stop/{user_id}")
+            print("🛑 바카라 모니터링 중지됨")
         except:
             pass
         
@@ -281,7 +324,7 @@ async def test_baccarat_api_with_streak_analysis(user_id, ws_url=None):
         except asyncio.CancelledError:
             pass
         
-        print("\n=== 테스트 완료 ===")
+        print("\n=== 시스템 종료 완료 ===")
 
 async def websocket_client(user_id):
     """WebSocket 클라이언트"""
@@ -300,8 +343,8 @@ async def websocket_client(user_id):
                         player_count = len(streak_data.get("player_streak_rooms", []))
                         banker_count = len(streak_data.get("banker_streak_rooms", []))
                         
-                        if player_count > 0 or banker_count > 0:
-                            print(f"\n📊 WebSocket 업데이트: P:{player_count}, B:{banker_count} 방 감지")
+                        # WebSocket 업데이트는 조용히 처리 (필요시에만 출력)
+                        # print(f"📡 실시간 업데이트: P:{player_count}, B:{banker_count}")
                     
                 except Exception as e:
                     break
@@ -309,7 +352,8 @@ async def websocket_client(user_id):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        print(f"WebSocket 연결 오류: {e}")
+        # WebSocket 연결 오류는 조용히 처리
+        pass
 
 def print_response(response, show_data=False):
     """API 응답 출력"""
@@ -352,29 +396,32 @@ def get_server_url():
     return normalized_url
 
 if __name__ == "__main__":
-    print("=== 바카라 자동 모니터링 + 연패 분석 클라이언트 ===")
+    print("=== 바카라 무한 연패 모니터링 시스템 ===")
+    print("📊 filtered_room_mappings.json 파일의 방들을 모니터링합니다")
+    print("🔄 조건에 맞는 방이 나올 때까지 무한 루프로 동작합니다")
+    print("⏹️  중단하려면 언제든 Ctrl+C를 누르세요")
     
     # 서버 URL 설정
     BASE_URL = get_server_url()
     WS_URL = f"ws://{BASE_URL.replace('http://', '').replace('https://', '')}/ws/baccarat"
     
-    print(f"서버 URL: {BASE_URL}")
+    print(f"🌐 서버 URL: {BASE_URL}")
     
     # WebSocket URL 입력
-    print("\n바카라 WebSocket URL을 입력하세요:")
+    print("\n🔗 바카라 WebSocket URL을 입력하세요:")
     print("예시: wss://skylinestart.evo-games.com/public/lobby/socket/v2/...")
     ws_url = input("WebSocket URL: ")
     
     if not ws_url:
-        print("\n오류: WebSocket URL이 필요합니다.")
+        print("\n❌ 오류: WebSocket URL이 필요합니다.")
         sys.exit(1)
     
     # 사용자 ID 입력
-    user_id = input("\n사용자 ID를 입력하세요 (기본값: test_user_1): ") or "test_user_1"
+    user_id = input("\n👤 사용자 ID를 입력하세요 (기본값: test_user_1): ") or "test_user_1"
     
-    # 테스트 실행
+    # 무한 모니터링 시작
     try:
-        asyncio.run(test_baccarat_api_with_streak_analysis(user_id, ws_url))
+        asyncio.run(test_baccarat_continuous_monitoring(user_id, ws_url))
     except Exception as e:
-        print(f"\n예상치 못한 오류 발생: {e}")
+        print(f"\n💥 예상치 못한 오류 발생: {e}")
         sys.exit(1)
