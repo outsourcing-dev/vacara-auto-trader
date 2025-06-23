@@ -16,7 +16,7 @@ from fastapi import WebSocket
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levellevel)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger("lobby_monitor")
 
@@ -98,45 +98,35 @@ class BaccaratWebSocketClient:
             f"&client_version={self.config.client_version}"
         )
         
+    # lobby_monitor.py의 BaccaratWebSocketClient 클래스의 connect 메서드 수정
+
     async def connect(self) -> bool:
         """WebSocket 서버에 연결"""
         if self.is_connected:
             logger.warning("Already connected")
             return True
-        
+
         url = self._build_websocket_url()
         logger.info(f"WebSocket 서버에 연결 중...")
-        
-        
+        logger.info(f"연결 URL: {url[:100]}...")  # URL 로깅 추가
+
         # 브라우저와 동일한 인증 헤더 설정
         headers = {
             "Origin": f"https://{self.config.domain}",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Cookie": f"EVOSESSIONID={self.config.session_id}"
-        }
-        
-        # 추가 헤더 - Accept 헤더 추가
-        headers.update({
+            "Cookie": f"EVOSESSIONID={self.config.session_id}",
             "Accept-Encoding": "gzip, deflate, br",
             "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache"
-        })
-        
+        }
+
         try:
-            # websockets 버전 호환성 문제 해결
-            # 1. 버전에 따라 다른 방식으로 연결 시도
-            try:
-                # 방법 1: connect 함수에 헤더 전달 (최신 버전)
-                self.websocket = await websockets.connect(
-                    url, 
-                    extra_headers=headers
-                )
-            except TypeError:
-                # 방법 2: connect 함수에 헤더 전달하지 않음 (이전 버전)
-                logger.info("이전 버전의 websockets 사용 - 헤더 설정 없이 연결 시도")
-                # URL에 쿠키 정보 포함되어 있으므로 헤더 없이도 연결 가능할 수 있음
-                self.websocket = await websockets.connect(url)
+            # 연결 타임아웃을 30초로 증가
+            self.websocket = await asyncio.wait_for(
+                websockets.connect(url, extra_headers=headers), 
+                timeout=30.0  # 20초 → 30초로 증가
+            )
             
             self.is_connected = True
             logger.info("WebSocket 연결 완료 ✅")
@@ -145,17 +135,36 @@ class BaccaratWebSocketClient:
             self.task = asyncio.create_task(self._receive_messages())
             
             return True
+            
+        except asyncio.TimeoutError:
+            logger.error("연결 타임아웃 (30초)")
+            self.is_connected = False
+            return False
+        except websockets.exceptions.InvalidHandshake as e:
+            logger.error(f"핸드셰이크 실패: {e}")
+            logger.error(f"응답 상태: {e.response_headers if hasattr(e, 'response_headers') else 'N/A'}")
+            self.is_connected = False
+            return False
+        except websockets.exceptions.InvalidURI as e:
+            logger.error(f"잘못된 URI: {e}")
+            self.is_connected = False
+            return False
         except Exception as e:
             logger.error(f"연결 오류: {e}")
+            logger.error(f"오류 타입: {type(e).__name__}")
             
             # HTTP 403 오류 발생 시 추가 정보 제공
             if "403" in str(e):
                 logger.error("HTTP 403 Forbidden 에러 발생: 인증 헤더가 올바르지 않거나 세션이 만료되었을 수 있습니다.")
                 logger.error("새로운 세션 ID를 얻어 설정을 업데이트하세요.")
             
+            # 더 상세한 에러 정보 출력
+            import traceback
+            logger.error(f"상세 에러 정보:\n{traceback.format_exc()}")
+            
             self.is_connected = False
             return False
-    
+        
     async def disconnect(self) -> bool:
         """WebSocket 서버와의 연결 종료"""
         if not self.is_connected:
