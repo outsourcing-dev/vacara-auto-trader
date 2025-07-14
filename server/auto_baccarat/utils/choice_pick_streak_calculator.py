@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class ChoicePickStreakCalculator:
     """
-    초이스픽 기반 연패 계산기 - 현재 연패 수만 계산
+    초이스픽 기반 연패 계산기 - N 처리 개선 버전
     """
     
     def __init__(self):
@@ -14,15 +14,7 @@ class ChoicePickStreakCalculator:
     
     def calculate_room_streak(self, room_id: str, room_name: str, raw_results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
-        방의 현재 연패 정보 계산 (단순화 버전)
-        
-        Args:
-            room_id: 방 ID
-            room_name: 방 이름  
-            raw_results: 원시 게임 결과 데이터
-            
-        Returns:
-            연패 정보 Dict 또는 None (데이터 부족시)
+        방의 현재 연패 정보 계산 (N 처리 개선)
         """
         try:
             # 1. 원시 데이터를 P/B 결과로 변환
@@ -31,13 +23,13 @@ class ChoicePickStreakCalculator:
             if len(filtered_results) < 16:  # 최소 16개 필요
                 return None
             
-            # 2. 예측 결과 계산
+            # 2. 예측 결과 계산 (N 포함)
             prediction_results = self._calculate_predictions(filtered_results)
             
             if not prediction_results:
                 return None
             
-            # 3. 현재 연패 수만 계산
+            # 3. 현재 연패 수만 계산 (N 제외)
             current_streak = self._calculate_streak_count(prediction_results)
             
             # 4. 단순한 결과만 반환
@@ -80,7 +72,7 @@ class ChoicePickStreakCalculator:
     
     def _calculate_predictions(self, results: List[str]) -> List[Dict[str, Any]]:
         """
-        초이스픽을 사용하여 예측 결과 계산
+        초이스픽을 사용하여 예측 결과 계산 (N 처리 개선)
         """
         predictions = []
         
@@ -98,14 +90,25 @@ class ChoicePickStreakCalculator:
                 
                 if choice_system.has_sufficient_data():
                     predicted_pick = choice_system.generate_choice_pick()
-                    is_win = predicted_pick == actual_result
                     
-                    # 디버깅: 각 예측 과정 로그
-                    result_text = "승" if is_win else "패"
-                    logger.info(f"게임 {i+1}: {predicted_pick} vs {actual_result} = {result_text}")
+                    # N 처리 개선
+                    if predicted_pick == 'N':
+                        result_status = 'no_prediction'
+                        is_win = None  # N일 때는 승패 판정 안함
+                        result_text = "예측불가(N)"
+                        logger.info(f"게임 {i+1}: N (예측 불가)")
+                    else:
+                        is_win = predicted_pick == actual_result
+                        result_status = 'win' if is_win else 'loss'
+                        result_text = "승" if is_win else "패"
+                        logger.info(f"게임 {i+1}: {predicted_pick} vs {actual_result} = {result_text}")
                     
                     predictions.append({
-                        "is_win": is_win
+                        "game_number": i + 1,
+                        "predicted_pick": predicted_pick,
+                        "actual_result": actual_result,
+                        "is_win": is_win,
+                        "result_status": result_status  # 'win', 'loss', 'no_prediction'
                     })
                 
             except Exception as e:
@@ -117,23 +120,24 @@ class ChoicePickStreakCalculator:
 
     def _calculate_streak_count(self, prediction_results: List[Dict[str, Any]]) -> int:
         """
-        현재 진행중인 연패 수 계산 (최신부터 역순)
+        현재 진행중인 연패 수 계산 (N 제외, 최신부터 역순)
         """
         if not prediction_results:
             return 0
         
         current_streak = 0
         
-        # 디버깅: 최근 예측 결과들 로그
-        recent_results = [("승" if p["is_win"] else "패") for p in prediction_results[-10:]]
-        logger.info(f"📈 최근 10개 예측 결과: {' '.join(recent_results)}")
-        
-        # 최신 결과부터 역순으로 연패 계산
+        # 최신 결과부터 역순으로 연패 계산 (N은 제외)
         for i, prediction in enumerate(reversed(prediction_results)):
-            if not prediction["is_win"]:  # 예측 실패 (패배)
+            result_status = prediction.get("result_status", "")
+            
+            if result_status == "no_prediction":  # N인 경우 건너뛰기
+                logger.info(f"연패 계산: 뒤에서 {i+1}번째 게임 N(예측불가) - 건너뛰기")
+                continue
+            elif result_status == "loss":  # 예측 실패 (패배)
                 current_streak += 1
                 logger.info(f"연패 {current_streak}: 뒤에서 {i+1}번째 게임 패배")
-            else:  # 예측 성공 (승리) - 연패 중단
+            elif result_status == "win":  # 예측 성공 (승리) - 연패 중단
                 logger.info(f"연패 중단: 뒤에서 {i+1}번째 게임 승리")
                 break
         
